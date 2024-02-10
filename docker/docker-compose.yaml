@@ -1,0 +1,19 @@
+# Docker version 20.10.5, build 55c4c88
+# docker-compose version 1.29.2, build unknown
+version: '3.8'
+services:
+  research:
+    build: .
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+    shm_size: '8G'
+    stdin_open: true
+    tty: true
+    volumes:
+      - ~/.gitconfig:/root/.gitconfig
+      - ~/.ssh:/root/.ssh
+      - ~/learning-from-adversarial-perturbations:/root/project
+      - ~/datasets:/root/datasets

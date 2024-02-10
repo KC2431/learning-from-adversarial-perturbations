@@ -1,0 +1,10 @@
+.DS_Store
+.hypothesis/
+.ipynb_checkpoints/
+__pycache__/
+datasets*/
+figs*/
+logs/
+models*/
+/artificial*/
+data.zip
