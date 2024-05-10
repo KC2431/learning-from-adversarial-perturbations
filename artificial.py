@@ -133,8 +133,8 @@ class Main(LightningLite):
         noise_classifier = self.setup(OneHiddenNet(in_dim, hidden_dim))
 
         noise_loss = train(noise_classifier, noise_data, target_labels)
-        freeze(classifier)
-        classifier.eval()
+        freeze(noise_classifier)
+        noise_classifier.eval()
         noise_acc = test(noise_classifier, noise_data, target_labels)
         noise_acc_for_natural = test(noise_classifier, data, labels)
 
@@ -161,8 +161,8 @@ class Main(LightningLite):
         adv_classifier = self.setup(OneHiddenNet(in_dim, hidden_dim))
 
         adv_loss = train(adv_classifier, adv_data, target_labels)
-        freeze(classifier)
-        classifier.eval()
+        freeze(adv_classifier)
+        adv_classifier.eval()
         adv_acc = test(adv_classifier, adv_data, target_labels)
         adv_acc_for_natural = test(adv_classifier, data, labels)
 
