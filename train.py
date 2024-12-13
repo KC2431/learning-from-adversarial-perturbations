@@ -15,6 +15,7 @@ from utils.datasets import CIFAR10, FMNIST, MNIST, SequenceDataset #, CIFAR10Sub
 from utils.litmodules import Classification
 from utils.utils import ModelWithNormalization, dataloader, set_seed
 
+torch.autograd.set_detect_anomaly(True)
 
 def train(dataset_name: str, devices: List[int]) -> None:
     root = os.path.join('models', dataset_name)
@@ -27,7 +28,7 @@ def train(dataset_name: str, devices: List[int]) -> None:
 
     set_seed()
 
-    dataset_root = os.path.join(os.path.sep, 'root', 'datasets')
+    dataset_root = os.path.join(os.path.sep, '/home/htc/kchitranshi/SCRATCH', 'CFE_datasets')
 
     train_batch_size = 128
     n_class = 10
@@ -60,7 +61,7 @@ def train(dataset_name: str, devices: List[int]) -> None:
             ratio = float(sd[-1])
             dataset_name = '_'.join(sd[:-1])
 
-        perturbation_dataset_path = os.path.join('datasets',  dataset_name, 'dataset')
+        perturbation_dataset_path = os.path.join('/home/htc/kchitranshi/SCRATCH/CFE_datasets',  dataset_name, 'dataset')
         raw_dataset = torch.load(perturbation_dataset_path, map_location='cpu')
         imgs, labels = raw_dataset['imgs'], raw_dataset['labels']
 
@@ -96,7 +97,7 @@ def train(dataset_name: str, devices: List[int]) -> None:
 
     optim = SGD
     optim_kwargs = {
-        'lr': 0.1,
+        'lr': 0.01,
         'momentum': 0.9,
         'weight_decay': 5e-4,
         'nesterov': True,
@@ -136,6 +137,7 @@ def train(dataset_name: str, devices: List[int]) -> None:
         precision=16,
         num_sanity_val_steps=0,
         deterministic=True,
+        #gradient_clip_val=1.0,
     )
 
     litmodule = Classification(
