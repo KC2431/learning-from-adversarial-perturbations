@@ -12,7 +12,6 @@ from utils.create import Create
 from utils.datasets import CIFAR10, FMNIST, MNIST
 from utils.utils import ModelWithNormalization, dataloader, set_seed
 
-
 class Main(LightningLite):
     def run(
         self,
@@ -22,7 +21,7 @@ class Main(LightningLite):
         #large_epsilon: bool = False,
     ) -> None:
         
-        root = os.path.join('datasets', f'{dataset_name}_{mode}_{norm}')
+        root = os.path.join('/home/htc/kchitranshi/SCRATCH/CFE_datasets', f'{dataset_name}_{mode}_{norm}')
         #root = root + '_large' if large_epsilon else root
 
         if os.path.exists(root):
@@ -33,9 +32,9 @@ class Main(LightningLite):
             #if self.is_global_zero:
             os.makedirs(root)
 
-        dataset_root = os.path.join(os.path.sep, 'root', 'datasets')
+        dataset_root = os.path.join(os.path.sep, '/home/htc/kchitranshi/SCRATCH', 'CFE_datasets')
 
-        ckpt_dir_path = os.path.join('models', dataset_name, 'version_0', 'checkpoints')
+        ckpt_dir_path = os.path.join('/home/htc/kchitranshi/SCRATCH/CFE_models', dataset_name, 'version_0', 'checkpoints')
         ckpt_name = [fname for fname in os.listdir(ckpt_dir_path) if '.ckpt' in fname][0]
         ckpt_path = os.path.join(ckpt_dir_path, ckpt_name)
 
@@ -69,13 +68,13 @@ class Main(LightningLite):
         if dataset_name == 'MNIST':
             #assert not large_epsilon
             classifier = ConvNet(n_class)
-            atk_kwargs['steps'] = 100 if norm in ('L2', 'Linf') else 10
+            atk_kwargs['steps'] = 100 if norm in ('L2', 'Linf') else 100#20
             atk_kwargs['eps'] = 2 if norm == 'L2' else 0.3 if norm == 'Linf' else None
 
         elif dataset_name == 'FMNIST':
             #assert not large_epsilon
             classifier = ConvNet(n_class)
-            atk_kwargs['steps'] = 100 if norm in ('L2', 'Linf') else 35
+            atk_kwargs['steps'] = 100 if norm in ('L2', 'Linf') else 100#35
             atk_kwargs['eps'] = 2 if norm == 'L2' else 0.3 if norm == 'Linf' else None
 
         elif dataset_name == 'CIFAR10':
@@ -84,7 +83,7 @@ class Main(LightningLite):
             #    atk_kwargs['steps'] = 100 if norm == 'L2' else 460
             #    atk_kwargs['eps'] = 1.06 if norm == 'L2' else None
             #else:
-            atk_kwargs['steps'] = 100 if norm in ('L2', 'Linf') else 150
+            atk_kwargs['steps'] = 100 if norm in ('L2', 'Linf') else 100#150
             atk_kwargs['eps'] = 0.5 if norm == 'L2' else 0.1 if norm == 'Linf' else None
 
         else:
