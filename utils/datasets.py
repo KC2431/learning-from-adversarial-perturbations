@@ -106,7 +106,43 @@ class CIFAR10(torchvision.datasets.CIFAR10):
 
         super().__init__(root, train, transform, target_transform, True)
 
+class IMAGENET(torchvision.datasets.ImageNet):
 
+    mean=[0.485, 0.456, 0.406]
+    std=[0.229, 0.224, 0.225]
+    n_class = 1000
+    size=(3, 224, 224)
+    dim = size[0] * size[1] * size[2]
+
+    def __init__(self, 
+        root: str, 
+        train: bool, 
+        transform: Optional[Callable] = None, 
+        target_transform: Optional[Callable] = None
+    ) -> None:
+        pass
+
+        if train and transform is None:
+            normalize = T.Normalize(mean=[0.485, 0.456, 0.406],
+                                 std=[0.229, 0.224, 0.225])
+
+# Add normalization to the pipeline
+            transform = T.Compose([
+                T.Resize(256),
+                T.CenterCrop(224),
+                T.ToTensor(),
+                normalize,
+            ])
+
+        elif not train and transform is None:
+            transform = T.Compose([
+                T.Resize(256),
+                T.CenterCrop(224),
+                T.ToTensor(),
+            ])
+        split = 'train' if train else 'val'
+        super().__init__(root=root, split=split, transform=transform, target_transform=target_transform)
+        
 '''
 from typing import List
 
