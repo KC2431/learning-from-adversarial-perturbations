@@ -3,6 +3,7 @@ from typing import Any, Callable, Optional, Tuple
 import torchvision
 import torchvision.transforms as T
 from torch.utils.data import Dataset
+from torch.utils.data.dataset import Dataset
 
 
 class SequenceDataset(Dataset):
@@ -127,14 +128,19 @@ class IMAGENET(torchvision.datasets.ImageNet):
                                  std=[0.229, 0.224, 0.225])
 
 # Add normalization to the pipeline
-            transform = T.Compose([
-                T.Resize(256),
-                T.CenterCrop(224),
-                T.ToTensor(),
-                normalize,
-            ])
+            transform = T.Compose([T.Resize(256),
+                                   T.RandomHorizontalFlip(),
+                                   T.RandomVerticalFlip(),
+                                   T.RandomRotation(degrees=45),
+                                   T.ColorJitter(brightness=0.5, contrast=0.5, saturation=0.5, hue=0.5),
+                                   T.CenterCrop(224),
+                                   T.ToTensor(),
+                                   ]
+            )
+            
 
         elif not train and transform is None:
+            
             transform = T.Compose([
                 T.Resize(256),
                 T.CenterCrop(224),
@@ -142,7 +148,60 @@ class IMAGENET(torchvision.datasets.ImageNet):
             ])
         split = 'train' if train else 'val'
         super().__init__(root=root, split=split, transform=transform, target_transform=target_transform)
-        
+
+class FOOD101(torchvision.datasets.Food101):
+
+    mean=[0.485, 0.456, 0.406]
+    std=[0.229, 0.224, 0.225]
+    n_class = 101
+    size=(3, 224, 224)
+    dim = size[0] * size[1] * size[2]
+
+    def __init__(self, 
+        root: str, 
+        train: bool, 
+        transform: Optional[Callable] = None, 
+        target_transform: Optional[Callable] = None
+    ) -> None:
+        pass
+
+        if train and transform is None:
+
+# Add normalization to the pipeline
+            transform = T.Compose([
+                    T.Resize(256),
+                    T.RandomHorizontalFlip(),
+                    T.RandomVerticalFlip(),
+                    T.RandomRotation(degrees=45),
+                    T.ColorJitter(brightness=0.5, contrast=0.5, saturation=0.5, hue=0.5),
+                    T.CenterCrop(224),
+                    T.ToTensor(),
+            ])
+            
+
+        elif not train and transform is None:
+            
+            transform = T.Compose([
+                T.Resize(256),
+                T.CenterCrop(224),
+                T.ToTensor(),
+            ])
+        split = 'train' if train else 'test'
+        super().__init__(root=root, split=split, transform=transform, target_transform=target_transform)
+
+class DatasetWrapper(Dataset):
+    def __init__(self, dataset, transform):
+        self.dataset = dataset
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, idx):
+        img, label = self.dataset[idx]
+        img = self.transform(img)
+        return img, label
+
 '''
 from typing import List
 
