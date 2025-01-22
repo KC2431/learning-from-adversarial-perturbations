@@ -42,4 +42,4 @@ echo 'Print GPUs'
 
 echo 'Running script'
 cd learning-from-adversarial-perturbations
-./bash/create.sh 0
+./bash/train_perturbation.sh 0

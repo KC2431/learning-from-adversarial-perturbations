@@ -24,11 +24,11 @@ class L1_MAD:
         self.loss_lambda = lamb
         self.mode=mode
 
-    def loss(self, logits, y_true, x, x_adv,mode):
+    def loss(self, logits, y_true, x, x_adv,mode, lamb):
         assert y_true.shape == (x.shape[0],), "Target label is expected to be a tensor of shape (n,)"
         assert len(logits.shape) == 2 if mode == 'natural' else len(logits.shape) == 1, "Logits is expected to be a tensor of shape (n, num_classes)"
-        return torch.nn.CrossEntropyLoss()(logits, y_true) + self.loss_lambda * torch.sum((x - x_adv).pow(2), dim = (1,2,3)).mean() if mode == 'natural' \
-                else (-logits * y_true).exp().mean() + self.loss_lambda * torch.sum((x - x_adv).pow(2), dim = 1).mean()
+        return torch.nn.CrossEntropyLoss()(logits, y_true) + lamb * torch.sum((x - x_adv).pow(2), dim = (1,2,3)).mean() if mode == 'natural' \
+                else (-logits * y_true).exp().mean() + lamb * torch.sum((x - x_adv).pow(2), dim = 1).mean()
 
     def get_perturbations(self, x, y):
 
@@ -39,9 +39,11 @@ class L1_MAD:
         freeze(self.model)
         self.model.eval()
 
+        lamb = self.loss_lambda
+
         x_adv = x + 0.01 * torch.rand_like(x)
         x_adv = torch.clamp(x_adv, self.min_image_range, self.max_image_range)
-        optim = self.optimizer([x_adv],lr=1e-2)
+        optim = self.optimizer([x_adv],lr=35e-4)
 
         for i in range(self.iters):
             optim.zero_grad()
@@ -51,15 +53,17 @@ class L1_MAD:
                                 y_true=y.squeeze(1), 
                                 x=x, 
                                 x_adv=x_adv,
-                                mode=self.mode
+                                mode=self.mode,
+                                lamb=lamb
                                 )
             loss.backward()
             optim.step()
             
             x_adv.data = torch.clamp(x_adv.data, self.min_image_range, self.max_image_range)
             
-            if i % 2 == 0:
+            if i % 10 == 0:
                 print("Iter: {}, Loss: {}".format(i, loss.item()))
+                #lamb *= 2
 
         with torch.no_grad():
             if self.mode == 'natural':

@@ -5,17 +5,18 @@ from typing import List
 import torch
 from pytorch_lightning import Trainer
 from pytorch_lightning.loggers.csv_logs import CSVLogger
-from torch.optim import SGD
+from torch.optim import SGD, Adam
 from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.utils.data import random_split, Subset
 from torchvision import transforms as T
+from torchvision.models import resnet50
 
 from utils.callbacks import EpochProgressBar
-from utils.classifiers import ConvNet, WideResNet
-from utils.datasets import CIFAR10, FMNIST, MNIST, SequenceDataset #, CIFAR10Sub
+from utils.classifiers import ConvNet, WideResNet, TinyVGG
+from utils.datasets import CIFAR10, FMNIST, MNIST, SequenceDataset, DatasetWrapper, FOOD101 #, CIFAR10Sub
 from utils.litmodules import Classification
 from utils.utils import ModelWithNormalization, dataloader, set_seed
-
-torch.autograd.set_detect_anomaly(True)
+import random
 
 def train(dataset_name: str, devices: List[int]) -> None:
     root = os.path.join('models', dataset_name)
@@ -30,8 +31,8 @@ def train(dataset_name: str, devices: List[int]) -> None:
 
     dataset_root = os.path.join(os.path.sep, '/home/htc/kchitranshi/SCRATCH', 'CFE_datasets')
 
-    train_batch_size = 128
-    n_class = 10
+    train_batch_size = 128 if 'FOOD101' not in dataset_name else 64
+    n_class = 10 if 'FOOD101' not in dataset_name else 101
 
     if 'FMNIST' in dataset_name:
         dataset_cls = FMNIST
@@ -39,20 +40,36 @@ def train(dataset_name: str, devices: List[int]) -> None:
         dataset_cls = MNIST
     elif 'CIFAR10' in dataset_name:
         dataset_cls = CIFAR10
+    elif 'FOOD101' in dataset_name:
+        dataset_cls = FOOD101
     else:
         raise ValueError(dataset_name)
     
     mean, std = dataset_cls.mean, dataset_cls.std
 
-    if dataset_name in ('MNIST', 'FMNIST', 'CIFAR10'):
-        train_dataset = dataset_cls(dataset_root, True)
-        val_dataset = dataset_cls(dataset_root, False)
+    if dataset_name in ('MNIST', 'FMNIST', 'CIFAR10','FOOD101'):
+        
+        if dataset_name in ('MNIST', 'FMNIST','CIFAR10'):
+            train_dataset = dataset_cls(dataset_root, True)
+            val_dataset = dataset_cls(dataset_root, False)
+        else:
+            train_dataset = dataset_cls('/home/htc/kchitranshi/SCRATCH/', True)
+            val_dataset = dataset_cls('/home/htc/kchitranshi/SCRATCH/', False)
+
+            val_indices = random.sample(range(len(val_dataset)), 5000)
+            val_dataset = Subset(val_dataset, val_indices)
 
     else:
         if 'MNIST' in dataset_name: # including FMNIST
             transform = None
         elif 'CIFAR10' in dataset_name:
             transform = T.Compose([T.RandomCrop(32, padding=4), T.RandomHorizontalFlip()])
+        elif 'FOOD101' in dataset_name:
+            transform = T.Compose([T.RandomHorizontalFlip(),
+                                   T.RandomVerticalFlip(),
+                                   T.RandomRotation(degrees=45),
+                                   ]
+            )
         else:
             raise ValueError(dataset_name)
         
@@ -79,7 +96,12 @@ def train(dataset_name: str, devices: List[int]) -> None:
         #    labels[labels == target_classes[1]] = 1
         #
         #else:
-        val_dataset = dataset_cls(dataset_root, False)
+        if 'FOOD101' in dataset_name:
+            val_dataset = dataset_cls('../SCRATCH/', False)
+            indices = random.sample(range(len(val_dataset)), 5000)
+            val_dataset = torch.utils.data.Subset(val_dataset, indices)
+        else:
+            val_dataset = dataset_cls(dataset_root, False)
 
         train_dataset = SequenceDataset(imgs, labels, transform)
 
@@ -90,18 +112,26 @@ def train(dataset_name: str, devices: List[int]) -> None:
         classifier = ConvNet(n_class)
     elif 'CIFAR10' in dataset_name:
         classifier = WideResNet(28, 10, 0.3, n_class)
+    elif 'FOOD101' in dataset_name:
+        classifier = resnet50()
+        classifier.fc = torch.nn.Linear(classifier.fc.in_features, n_class, bias=True)
+        classifier.train()
     else:
         raise ValueError(dataset_name)
     
     classifier = ModelWithNormalization(classifier, mean, std)
-
+    
     optim = SGD
+    
     optim_kwargs = {
         'lr': 0.01,
         'momentum': 0.9,
         'weight_decay': 5e-4,
         'nesterov': True,
     }
+    
+    
+    
 
     # including FMNIST
     if 'MNIST_uniform' in dataset_name \
@@ -121,6 +151,8 @@ def train(dataset_name: str, devices: List[int]) -> None:
         epochs = 200
     elif 'MNIST' in dataset_name:
         epochs = 100
+    elif 'FOOD101' in dataset_name:
+        epochs = 100
     else:
         raise ValueError(dataset_name)
 
@@ -137,7 +169,6 @@ def train(dataset_name: str, devices: List[int]) -> None:
         precision=16,
         num_sanity_val_steps=0,
         deterministic=True,
-        #gradient_clip_val=1.0,
     )
 
     litmodule = Classification(
