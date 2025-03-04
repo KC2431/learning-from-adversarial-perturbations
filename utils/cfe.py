@@ -9,8 +9,8 @@ from utils import *
 from torch import Tensor
 from typing import List, Tuple
 
-from Models import *
-
+from .Models import *
+from .utils import freeze
 
 class CFE(metaclass=ABCMeta):
     '''
@@ -64,7 +64,7 @@ class CFE(metaclass=ABCMeta):
             Tensor of shape (n, 1), the predictions of the model
         '''
         try:
-            return self.model(x * (self.maxs - self.mins) + self.mins)
+            return self.model(x)
         except Exception as e:
             print('The model is assumed to expect a tensor of shape \
                    (batch size, num features) as input. The following error \
@@ -189,7 +189,7 @@ class APG0_CFE(CFE):
         self.max_i = max_i
         self.eta = eta
         self.linesearch = linesearch
-        self.prox = {'zero': self.prox_0, 'twothirds': self.prox_twothirds, 
+        self.prox = {'zero': self.prox_0,  
                      'half': self.prox_half, 'one': self.prox_one,
                      'zero_fixed': self.prox_0_fixed, 'clamp': self.clamp_only}[prox]
         self.maxL = 1e4
@@ -212,7 +212,7 @@ class APG0_CFE(CFE):
             if self.scale_model:
                 return 2 * super().predict(x) - 1
             else:
-                return super().predict(x)
+                return super().predict(x.view(x.size(0), 3, 224, 224)).unsqueeze(1)
         else:
             return super().predict(x)
 
@@ -234,9 +234,9 @@ class APG0_CFE(CFE):
         if active is None:
             active = torch.ones_like(self.lam, dtype=torch.bool)
         if self.numclasses == 2 and self.lam0 != 0:
-            classloss = self.lam[active.view(-1)] * torch.relu(-y * self.predict(x + w) + self.c)
+            classloss = self.lam[active.view(-1)] * torch.relu(-y * self.predict(x + w) + self.c) # x and w are flattened
         elif self.lam0 != 0:
-            logits = self.predict(x + w)
+            logits = self.predict(x + w) # x and w are unflattened
             one_hot_y = F.one_hot(y.view(-1), self.numclasses)
             Z_t = torch.sum(logits * one_hot_y, dim=1, keepdim=True)
             Z_i = torch.amax(logits * (1 - one_hot_y) - (one_hot_y * 1e5), dim=1, keepdim=True)
@@ -439,6 +439,10 @@ class APG0_CFE(CFE):
             mask = y.view(y.size(0), 1) == torch.arange(self.numclasses, device=self.device, dtype=y.dtype).view(1, -1)
             assert (mask.any(-1)).all(), "Classes are expected to be in {0, ..., numclasses-1}"
 
+
+        B, C, H, W = x.shape
+        x = x.view(B, -1).clone()
+
         best_w = torch.zeros_like(x)
         best_norm = torch.full((x.size(0),), torch.inf, dtype=self.dtype, device=self.device)
         self.lam = torch.full((x.size(0), 1), self.lam0, device=self.device, dtype=self.dtype)
@@ -459,14 +463,19 @@ class APG0_CFE(CFE):
                     s1 = ''.join([' ' for _ in range(len(str(self.iters)) - len(str(i+1)))])
                     s2 = ''.join([' ' for _ in range(len(str(self.lam_steps)) - len(str(step+1)))])
                     print(f"\rSearch step {s2}{step+1}/{self.lam_steps}, APG0 Iteration {s1}{i+1}/{self.iters}  ", end='')
-                grad, loss = self.get_grad_loss(x, w, y)
 
+                #print(f'w max: {w.max()}, w.min: {w.min()}')
+                
+                grad, loss = self.get_grad_loss(x, w, y)
+                grad = grad.view(B, -1)
                 if self.linesearch:
                     L = self.backtrack_line_search(x, w, y, grad, loss, L)
                 else:
                     # step size decay
                     # we take the reciprocal twice since L is applied as 1 / L
                     L = 1 / (1 / L * math.sqrt(1 - i / self.iters))
+                
+                #print(f'Number of iters: {i}, lam_step: {step}')
 
                 # FISTA update
                 v_old = v.clone()
@@ -475,8 +484,11 @@ class APG0_CFE(CFE):
                 t = 0.5 * (1 + math.sqrt(1 + 4 * t_old ** 2))
                 w = v + ((t_old - 1) / t) * (v - v_old)
 
+                w = torch.clamp(x + w, 0, 1) - x
+
             if self.numclasses == 2:
                 succ = self.predict(x + v) * y > 0
+                print(f'Number of successful CFs: {succ.float().sum()} for lam step: {step}')
             else:
                 succ = self.predict(x + v).argmax(-1) == y.view(-1)
             succ = succ.view(-1)
@@ -497,8 +509,109 @@ class APG0_CFE(CFE):
         
         if self.verbose:
             print('')
-        return (x + best_w).detach()
+        return ((x + best_w).view(B, C, H, W)).detach()
     
+    def get_CFs_artificial(self, x: Tensor, y: Tensor) -> Tensor:
+        '''
+        Compute the counterfactuals using the APG0 algorithm.
+
+        Arguments:
+            x: Tensor of shape (n, d) expected to be in [0, 1],
+               the original data
+            y: Tensor of shape (n, 1) expected to be in {-1, 1},
+               the target label
+        Returns:
+            Tensor of shape (n, d)
+        '''
+        assert x.shape[0] == y.shape[0], "Data and target label are expected to have the same number of samples"
+        assert len(y.shape) == 2 and y.shape[1] == 1, "Target label is expected to be a tensor of shape (n, 1)"
+        if self.numclasses == 2:
+            mask1 = y == 1
+            mask2 = y == -1
+            assert (mask1 | mask2).all(), "Classes are expected to be in {-1, 1}"
+        else:
+            mask = y.view(y.size(0), 1) == torch.arange(self.numclasses, device=self.device, dtype=y.dtype).view(1, -1)
+            assert (mask.any(-1)).all(), "Classes are expected to be in {0, ..., numclasses-1}"
+
+        freeze(self.model)
+        self.model.eval()
+
+        x_unflattened = x.detach().clone()
+        x = x.view(x.size(0), -1).detach()
+
+        best_w = torch.zeros_like(x)
+        best_norm = torch.full((x.size(0),), torch.inf, dtype=self.dtype, device=self.device)
+        self.lam = torch.full((x.size(0), 1), self.lam0, device=self.device, dtype=self.dtype)
+        lam_lb = torch.zeros_like(self.lam)
+        lam_ub = torch.full_like(self.lam, 1e10)
+
+        for step in range(self.lam_steps):
+            w = torch.zeros_like(x)
+            v = torch.zeros_like(x)
+            v_old = torch.zeros_like(x)
+            t = 1.0
+            t_old = 1.0
+            L0 = self.L0 if self.linesearch else 1 / self.L0
+            L = torch.full_like(y, L0, dtype=self.dtype).view(y.size(0), *([1] * (x[0].dim())))
+
+            for i in range(self.iters):
+                if self.verbose:
+                    s1 = ''.join([' ' for _ in range(len(str(self.iters)) - len(str(i+1)))])
+                    s2 = ''.join([' ' for _ in range(len(str(self.lam_steps)) - len(str(step+1)))])
+                    print(f"\rSearch step {s2}{step+1}/{self.lam_steps}, APG0 Iteration {s1}{i+1}/{self.iters}  ", end='')
+                grad, loss = self.get_grad_loss(x_unflattened, w.view(*x_unflattened.shape), y)
+                grad = grad.reshape(grad.size(0), -1)
+
+                if self.linesearch:
+                    L = self.backtrack_line_search(x, w, y, grad, loss, L)
+                else:
+                    # step size decay
+                    # we take the reciprocal twice since L is applied as 1 / L
+                    L = 1 / (1 / L * math.sqrt(1 - i / self.iters))
+                
+                # FISTA update
+                v_old = v.clone()
+                v = self.prox(w - 1 / L * grad, x, L)
+                t_old = t
+                t = 0.5 * (1 + math.sqrt(1 + 4 * t_old ** 2))
+                w = v + ((t_old - 1) / t) * (v - v_old)
+                #print(f'loss: {loss.sum().item()}')
+                #print(f'grad max norm: {grad.max().item()}')
+                #print(f'self.lam range {self.lam.min().item()} {self.lam.max().item()}')
+                
+            print(f'end of step {step}')
+            print('------------------------------------------------------------------------------')
+            if self.numclasses == 2:
+                print((v).max().item(),(v).min().item())
+                succ = torch.nn.functional.tanh(self.predict(x + v)) * y.squeeze(-1) > 0
+            else:
+                succ = self.predict(x_unflattened + v.view(*x_unflattened.shape)).argmax(-1) == y.view(-1)
+            
+            succ = succ.view(-1)
+            print(f'Attack success rate %: {(succ.float().mean().item() * 100):.4f}')
+            if self.lam_steps == 1:
+                best_w = v.clone()
+                best_norm = v.norm(p=0, dim=-1)
+            # save the sparsest successful CF so far
+            
+            
+            better = (best_norm > v.norm(p=0, dim=-1)) & succ
+            best_norm[better] = v[better].norm(p=0, dim=-1)
+            best_w[better] = v[better].clone()
+            # increase weight of the classification loss if no CF was found
+            # and decrease if one was found
+            lam_ub[succ] = self.lam[succ]
+            lam_lb[~succ] = self.lam[~succ]
+            mask = lam_ub < 1e9
+            self.lam[mask] = (lam_ub[mask] + lam_lb[mask]) / 2
+            self.lam[~mask] *= 10#torch.where(self.lam[~mask] < 1e5, self.lam[~mask] * 10, self.lam[~mask])
+            print(f'self.lam max: {self.lam.max().item()}, self.lam min: {self.lam.min().item()}')
+
+        
+        if self.verbose:
+            print('')
+        assert not torch.isnan(x_unflattened + best_w.view(*x_unflattened.shape)).any(), "NaN values found in the CFs"
+        return (x_unflattened + best_w.view(*x_unflattened.shape)).detach()
 
 
 class APG0_CFE_KDE(APG0_CFE):
