@@ -8,9 +8,9 @@ now=$(TZ=UTC-9 date '+%Y-%m-%d-%H-%M-%S')
 
 devices=${@}
 
-datasets=(MNIST FMNIST CIFAR10)
+datasets=(FMNIST MNIST CIFAR10)
 modes=(natural_rand natural_det)
-norms=(L0 L2 Linf)
+norms=(L2 Linf)
 for dataset in "${datasets[@]}"; do
 for mode in "${modes[@]}"; do
 for norm in "${norms[@]}"; do

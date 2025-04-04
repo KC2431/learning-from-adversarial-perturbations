@@ -42,4 +42,5 @@ echo 'Print GPUs'
 
 echo 'Running script'
 cd learning-from-adversarial-perturbations
-./bash/train_perturbation.sh 0
+python pascal_fine_tune.py
+
