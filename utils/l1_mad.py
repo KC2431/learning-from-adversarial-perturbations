@@ -2,7 +2,6 @@ import torch
 from .Models import *
 from .utils import freeze
 
-torch.manual_seed(0)
 class L1_MAD:
     def __init__(self, 
                  model,
@@ -28,13 +27,12 @@ class L1_MAD:
         assert y_true.shape == (x.shape[0],), "Target label is expected to be a tensor of shape (n,)"
         assert len(logits.shape) == 2 if mode == 'natural' else len(logits.shape) == 1, "Logits is expected to be a tensor of shape (n, num_classes)"
         return torch.nn.CrossEntropyLoss()(logits, y_true) + lamb * torch.sum((x - x_adv).pow(2), dim = (1,2,3)).mean() if mode == 'natural' \
-                else (-logits * y_true).exp().mean() + lamb * torch.sum((x - x_adv).pow(2), dim = 1).mean()
+                else (-logits * y_true.cuda()).exp().mean() + lamb * torch.sum((x - x_adv).pow(2), dim = 1).mean()
 
     def get_perturbations(self, x, y):
 
         assert x.min() >= self.min_image_range and x.max() <= self.max_image_range, f"Data is expected to be in the specified range [{self.min_image_range}, {self.max_image_range}]"        
         assert x.shape[0] == y.shape[0], "Data and target label are expected to have the same number of samples"
-        assert len(y.shape) == 2 and y.shape[1] == 1, "Target label is expected to be a tensor of shape (n, 1)"
 
         freeze(self.model)
         self.model.eval()
@@ -43,7 +41,7 @@ class L1_MAD:
 
         x_adv = x + 0.01 * torch.rand_like(x)
         x_adv = torch.clamp(x_adv, self.min_image_range, self.max_image_range)
-        optim = self.optimizer([x_adv],lr=35e-4)
+        optim = self.optimizer([x_adv],lr=0.001)
 
         for i in range(self.iters):
             optim.zero_grad()
@@ -68,7 +66,10 @@ class L1_MAD:
         with torch.no_grad():
             if self.mode == 'natural':
                 print(self.model(x_adv).argmax(1).eq(y.squeeze(1)).float().mean().item())
+            
+            
 
+        assert x_adv.min() >= self.min_image_range and x_adv.max() <= self.max_image_range, "Adversarial image needs to be in image range."
         return x_adv.detach()
 
 if __name__ == '__main__':

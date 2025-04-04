@@ -212,9 +212,9 @@ class APG0_CFE(CFE):
             if self.scale_model:
                 return 2 * super().predict(x) - 1
             else:
-                return super().predict(x.view(x.size(0), 3, 224, 224)).unsqueeze(1)
+                return super().predict(x)
         else:
-            return super().predict(x)
+            return super().predict(x.view(x.size(0), 3, 32, 32))
 
 
     def loss(self, x: Tensor, w: Tensor, y: Tensor, active: Tensor | None = None) -> Tensor:
@@ -465,9 +465,8 @@ class APG0_CFE(CFE):
                     print(f"\rSearch step {s2}{step+1}/{self.lam_steps}, APG0 Iteration {s1}{i+1}/{self.iters}  ", end='')
 
                 #print(f'w max: {w.max()}, w.min: {w.min()}')
-                
+
                 grad, loss = self.get_grad_loss(x, w, y)
-                grad = grad.view(B, -1)
                 if self.linesearch:
                     L = self.backtrack_line_search(x, w, y, grad, loss, L)
                 else:
@@ -488,9 +487,11 @@ class APG0_CFE(CFE):
 
             if self.numclasses == 2:
                 succ = self.predict(x + v) * y > 0
-                print(f'Number of successful CFs: {succ.float().sum()} for lam step: {step}')
             else:
                 succ = self.predict(x + v).argmax(-1) == y.view(-1)
+            
+            
+
             succ = succ.view(-1)
             if self.lam_steps == 1:
                 best_w = v.clone()
@@ -509,6 +510,8 @@ class APG0_CFE(CFE):
         
         if self.verbose:
             print('')
+
+        print(f'Number of successful CFs: {(self.predict(x + best_w).argmax(-1) == y.view(-1)).float().sum():.2f}')
         return ((x + best_w).view(B, C, H, W)).detach()
     
     def get_CFs_artificial(self, x: Tensor, y: Tensor) -> Tensor:
@@ -524,20 +527,7 @@ class APG0_CFE(CFE):
             Tensor of shape (n, d)
         '''
         assert x.shape[0] == y.shape[0], "Data and target label are expected to have the same number of samples"
-        assert len(y.shape) == 2 and y.shape[1] == 1, "Target label is expected to be a tensor of shape (n, 1)"
-        if self.numclasses == 2:
-            mask1 = y == 1
-            mask2 = y == -1
-            assert (mask1 | mask2).all(), "Classes are expected to be in {-1, 1}"
-        else:
-            mask = y.view(y.size(0), 1) == torch.arange(self.numclasses, device=self.device, dtype=y.dtype).view(1, -1)
-            assert (mask.any(-1)).all(), "Classes are expected to be in {0, ..., numclasses-1}"
-
-        freeze(self.model)
-        self.model.eval()
-
-        x_unflattened = x.detach().clone()
-        x = x.view(x.size(0), -1).detach()
+        assert len(y.shape) == 1, "Target label is expected to be a tensor of shape (n, 1)"
 
         best_w = torch.zeros_like(x)
         best_norm = torch.full((x.size(0),), torch.inf, dtype=self.dtype, device=self.device)
@@ -559,9 +549,8 @@ class APG0_CFE(CFE):
                     s1 = ''.join([' ' for _ in range(len(str(self.iters)) - len(str(i+1)))])
                     s2 = ''.join([' ' for _ in range(len(str(self.lam_steps)) - len(str(step+1)))])
                     print(f"\rSearch step {s2}{step+1}/{self.lam_steps}, APG0 Iteration {s1}{i+1}/{self.iters}  ", end='')
-                grad, loss = self.get_grad_loss(x_unflattened, w.view(*x_unflattened.shape), y)
-                grad = grad.reshape(grad.size(0), -1)
 
+                grad, loss = self.get_grad_loss(x, w, y)
                 if self.linesearch:
                     L = self.backtrack_line_search(x, w, y, grad, loss, L)
                 else:
@@ -575,26 +564,19 @@ class APG0_CFE(CFE):
                 t_old = t
                 t = 0.5 * (1 + math.sqrt(1 + 4 * t_old ** 2))
                 w = v + ((t_old - 1) / t) * (v - v_old)
-                #print(f'loss: {loss.sum().item()}')
-                #print(f'grad max norm: {grad.max().item()}')
-                #print(f'self.lam range {self.lam.min().item()} {self.lam.max().item()}')
-                
-            print(f'end of step {step}')
-            print('------------------------------------------------------------------------------')
+
+                #w = torch.clamp(x + w, self.range_min, self.range_max) - x
+
             if self.numclasses == 2:
-                print((v).max().item(),(v).min().item())
-                succ = torch.nn.functional.tanh(self.predict(x + v)) * y.squeeze(-1) > 0
+                succ = self.predict(x + v) * y > 0
             else:
-                succ = self.predict(x_unflattened + v.view(*x_unflattened.shape)).argmax(-1) == y.view(-1)
+                succ = self.predict(x + v).argmax(-1) == y.view(-1)
             
             succ = succ.view(-1)
-            print(f'Attack success rate %: {(succ.float().mean().item() * 100):.4f}')
             if self.lam_steps == 1:
                 best_w = v.clone()
                 best_norm = v.norm(p=0, dim=-1)
             # save the sparsest successful CF so far
-            
-            
             better = (best_norm > v.norm(p=0, dim=-1)) & succ
             best_norm[better] = v[better].norm(p=0, dim=-1)
             best_w[better] = v[better].clone()
@@ -604,14 +586,13 @@ class APG0_CFE(CFE):
             lam_lb[~succ] = self.lam[~succ]
             mask = lam_ub < 1e9
             self.lam[mask] = (lam_ub[mask] + lam_lb[mask]) / 2
-            self.lam[~mask] *= 10#torch.where(self.lam[~mask] < 1e5, self.lam[~mask] * 10, self.lam[~mask])
-            print(f'self.lam max: {self.lam.max().item()}, self.lam min: {self.lam.min().item()}')
-
+            self.lam[~mask] *= 10
         
         if self.verbose:
             print('')
-        assert not torch.isnan(x_unflattened + best_w.view(*x_unflattened.shape)).any(), "NaN values found in the CFs"
-        return (x_unflattened + best_w.view(*x_unflattened.shape)).detach()
+
+        print(f'successful CFs ratio : {((self.predict(x + best_w) * y) > 0).float().mean():.2f}')
+        return (x + best_w).detach()
 
 
 class APG0_CFE_KDE(APG0_CFE):
