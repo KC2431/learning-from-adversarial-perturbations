@@ -6,17 +6,17 @@ from typing import Any, Dict, Literal
 import torch
 from pytorch_lightning.lite import LightningLite
 from torchvision.transforms import ToTensor, Compose, Resize, CenterCrop
-from torchvision.models import resnet50
+from torchvision.models import squeezenet1_1
 
 from utils.classifiers import ConvNet, WideResNet
 from utils.create import Create
-from utils.datasets import CIFAR10, FMNIST, MNIST, FOOD101
+from utils.datasets import CIFAR10, FMNIST, MNIST, FOOD101, IMAGENETTE
 from utils.utils import ModelWithNormalization, dataloader, set_seed
 
 class Main(LightningLite):
     def run(
         self,
-        dataset_name: Literal['MNIST', 'FMNIST', 'CIFAR10', 'FOOD101'],
+        dataset_name: Literal['MNIST', 'FMNIST', 'CIFAR10', 'IMAGENETTE'],
         mode: Literal['natural_rand', 'natural_det', 'uniform'], #, 'uniform_sub'],
         norm: Literal['L0', 'L2', 'Linf'],
         #large_epsilon: bool = False,
@@ -40,11 +40,11 @@ class Main(LightningLite):
         ckpt_path = os.path.join(ckpt_dir_path, ckpt_name)
 
         state_dict = torch.load(ckpt_path, map_location='cpu')['state_dict']
-        state_dict = OrderedDict((k.replace('classifier.', ''), v) for k, v in state_dict.items())
+        state_dict = OrderedDict((k.replace('classifier.', '',1), v) for k, v in state_dict.items())
 
         if dataset_name in ('MNIST', 'FMNIST'):
             dataset_cls = MNIST if dataset_name == 'MNIST' else FMNIST
-            batch_size = 100000
+            batch_size = 10000
             total_samples = 1200000
 
         elif dataset_name == 'CIFAR10':
@@ -52,8 +52,8 @@ class Main(LightningLite):
             batch_size = 2500
             total_samples = 50000
             #target_classes = [3, 9] if norm == 'L2' else [0, 3]
-        elif dataset_name == 'FOOD101':
-            dataset_cls = FOOD101
+        elif dataset_name == 'IMAGENETTE':
+            dataset_cls = IMAGENETTE
             batch_size = 500
             total_samples = 10000
 
@@ -66,28 +66,24 @@ class Main(LightningLite):
         atk_kwargs: Dict[str, Any] = {'norm': norm}
         
         if mode in ('natural_rand', 'natural_det'):
-            dataset = dataset_cls(dataset_root, True, ToTensor()) if dataset_name != 'FOOD101' else dataset_cls('../SCRATCH/', True,transform=Compose([
+            dataset = dataset_cls(dataset_root, True, ToTensor()) if dataset_name != 'IMAGENETTE' else dataset_cls('../SCRATCH/', True,transform=Compose([
                 Resize(256),
                 CenterCrop(224),
                 ToTensor(),
             ]))
-            if dataset_name == 'FOOD101':
-                indices = list(range(60000,75750)
-                               )
-                dataset = torch.utils.data.Subset(dataset, indices)
             loader = dataloader(dataset, batch_size, False)
             loader = self.setup_dataloaders(loader)
 
         if dataset_name == 'MNIST':
             #assert not large_epsilon
             classifier = ConvNet(n_class)
-            atk_kwargs['steps'] = 100 if norm in ('L2', 'Linf') else 100#20
+            atk_kwargs['steps'] = 100 if norm in ('L2', 'Linf') else 100
             atk_kwargs['eps'] = 2 if norm == 'L2' else 0.3 if norm == 'Linf' else None
 
         elif dataset_name == 'FMNIST':
             #assert not large_epsilon
             classifier = ConvNet(n_class)
-            atk_kwargs['steps'] = 100 if norm in ('L2', 'Linf') else 100#35
+            atk_kwargs['steps'] = 100 if norm in ('L2', 'Linf') else 100
             atk_kwargs['eps'] = 2 if norm == 'L2' else 0.3 if norm == 'Linf' else None
 
         elif dataset_name == 'CIFAR10':
@@ -96,14 +92,19 @@ class Main(LightningLite):
             #    atk_kwargs['steps'] = 100 if norm == 'L2' else 460
             #    atk_kwargs['eps'] = 1.06 if norm == 'L2' else None
             #else:
-            atk_kwargs['steps'] = 100 if norm in ('L2', 'Linf') else 100#150
+            atk_kwargs['steps'] = 100 if norm in ('L2', 'Linf') else 100
             atk_kwargs['eps'] = 0.5 if norm == 'L2' else 0.1 if norm == 'Linf' else None
 
-        elif dataset_name == 'FOOD101':
-            classifier = resnet50()
-            classifier.fc = torch.nn.Linear(2048, n_class,bias=True)
+        elif dataset_name == 'IMAGENETTE':
+            classifier = squeezenet1_1()
+            classifier.classifier = torch.nn.Sequential(
+                torch.nn.Dropout(p=0.5),
+                torch.nn.Conv2d(classifier.classifier[1].in_channels, n_class, kernel_size=(1, 1), stride=(1, 1)),
+                torch.nn.ReLU(inplace=True),
+                torch.nn.AdaptiveAvgPool2d((1, 1))
+            )
             atk_kwargs['steps'] = 100
-            atk_kwargs['eps'] = 0.1 if norm == 'L2' else 0.03 if norm == 'Linf' else None
+            atk_kwargs['eps'] = 3.0 if norm == 'L2' else 0.03 if norm == 'Linf' else None
 
         else:
             raise ValueError(dataset_name)
@@ -132,14 +133,14 @@ class Main(LightningLite):
     
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('dataset_name', choices=('MNIST', 'FMNIST', 'CIFAR10','FOOD101'))
+    parser.add_argument('dataset_name', choices=('MNIST', 'FMNIST', 'CIFAR10','IMAGENETTE'))
     parser.add_argument('mode', choices=(
         'natural_rand', 
         'natural_det', 
         'uniform', 
         #'uniform_sub',
     ))
-    parser.add_argument('norm', choices=('L0', 'L2', 'Linf'))
+    parser.add_argument('norm', choices=('L2', 'Linf','GDPR_CFE','SCFE'))
     parser.add_argument('devices', nargs='+', type=int)
     #parser.add_argument('--large_epsilon', action='store_true')
     args = parser.parse_args()

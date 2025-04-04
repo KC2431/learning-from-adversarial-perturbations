@@ -99,6 +99,7 @@ class Main(LightningLite):
         n_sample: int,
         n_noise_sample: int,
         norm: Literal['L0', 'L2', 'Linf'],
+        scfe: Literal['True', 'False'],
         mode: Literal['uniform', 'gauss'],
         perturbation_constraint: float,
         seed: int,
@@ -143,39 +144,24 @@ class Main(LightningLite):
         else:
             raise ValueError(mode)
 
-        if norm == 'L0':
+        if norm not in ['L2','Linf']:
             steps = int(in_dim * perturbation_constraint)
             #atk = BinaryPGDL0(classifier, steps, data_range=data_range)
-            """
-            print("Using APG0_CFE")
-            atk = APG0_CFE(model=classifier.to(noise_data.device), 
-                                mins=torch.tensor(10), # Just some random value 
-                                maxs=torch.tensor(10), # Just some random value
-                                numclasses=2, 
-                                range_min=None, 
-                                range_max=None,
-                                beta=25,
-                                L0=1e-2,
-                                lam0=1.0,
-                                c=0.0,
-                                prox='zero',
-                                linesearch=False, 
-                                iters=steps,
-                                scale_model=False,
-                                verbose=False,
-                                lam_steps=10,
-            )
-            """
-            atk = L1_MAD(
-                model=classifier,
-                max_image_range = 1.0,
-                min_image_range = 0.0, 
-                optimizer = torch.optim.Adam, 
-                iters=steps, 
-                lamb=1e-2,
-                mode=mode,
-                device= 'cuda:0',
-            )
+            
+            if norm == 'SCFE':
+                atk = APG0_CFE
+        
+            else:
+                atk = L1_MAD(
+                    model=classifier,
+                    max_image_range = 1.0,
+                    min_image_range = 0.0, 
+                    optimizer = torch.optim.Adam, 
+                    iters=steps, 
+                    lamb=1e-2,
+                    mode=mode,
+                    device= 'cuda:0',
+                )
         elif norm == 'L2':
             atk = BinaryPGDL2(classifier, 100, perturbation_constraint, data_range)
         elif norm == 'Linf':
@@ -183,23 +169,33 @@ class Main(LightningLite):
         else:
             raise ValueError(norm)
 
-        if not isinstance(atk,L1_MAD):
+        if norm in ['L2', 'Linf']:
             adv_data = atk(noise_data, target_labels)
-        else:
-            """
-            maxs = torch.tensor(data_range[1]).repeat(noise_data.view(noise_data.shape[0], -1).size(-1))[None,...]
-            mins = torch.tensor(data_range[0]).repeat(noise_data.view(noise_data.shape[0], -1).size(-1))[None,...]
-            
-            atk.maxs = maxs.to(noise_data.device)
-            atk.mins = mins.to(noise_data.device)
+        elif norm == 'SCFE':
+            noise_data_flattened = noise_data.view(noise_data.size(0), -1)
 
-            atk.range_min = atk.mins.clone().view(atk.mins.size(0), -1).to(noise_data.device)
-            atk.range_max = atk.maxs.clone().view(atk.maxs.size(0), -1).to(noise_data.device)
-            adv_data = atk.get_CFs(noise_data, target_labels.unsqueeze(1), mode=mode)
-            """
+            maxs = torch.tensor(data_range[1]).repeat(noise_data_flattened.size(-1))
+            mins = torch.tensor(data_range[0]).repeat(noise_data_flattened.size(-1))
+            
+            del noise_data_flattened
+
+            scfe_atk = atk(model=classifier, 
+                              mins=mins, 
+                              maxs=maxs,
+                              range_max=None,
+                              range_min=None,
+                              lam_steps=5,
+                              scale_model=False,
+                              iters=steps,
+                              numclasses=2,
+                              L0=1.0)
+            adv_data = scfe_atk.get_CFs_artificial(noise_data, target_labels)
+        elif norm == 'GDPR_CFE':
             atk.min_image_range = data_range[0]
             atk.max_image_range = data_range[1]
             adv_data = atk.get_perturbations(noise_data, target_labels.unsqueeze(1))
+        else:
+            NotImplementedError
 
         adv_data = self.to_device(adv_data)
 
@@ -239,7 +235,7 @@ if __name__ == '__main__':
     parser.add_argument('hidden_dim', type=int)
     parser.add_argument('n_sample', type=int)
     parser.add_argument('n_noise_sample', type=int)
-    parser.add_argument('norm', choices=('L0', 'L2', 'Linf'))
+    parser.add_argument('norm', choices=('L2', 'Linf', 'SCFE', 'GDPR_CFE'))
     parser.add_argument('mode', choices=('uniform', 'gauss'))
     parser.add_argument('perturbation_constraint', type=float)
     parser.add_argument('seed', type=int)
@@ -250,7 +246,7 @@ if __name__ == '__main__':
         'accelerator': 'gpu',
         'strategy': 'ddp_find_unused_parameters_false',
         'devices': args.devices,
-        'precision': 32,
+        'precision': 16,
     }
     
     Main(**lite_kwargs).run(
@@ -259,6 +255,7 @@ if __name__ == '__main__':
         args.n_sample,
         args.n_noise_sample,
         args.norm,
+        args.scfe,
         args.mode,
         args.perturbation_constraint,
         args.seed,

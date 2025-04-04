@@ -23,41 +23,21 @@ class Create:
         #rank: int,
     ) -> None:
         self.classifier = classifier
-        
         self.atk_kwargs = atk_kwargs
 
-        if atk_kwargs['norm'] == 'L0':
-            #self.atk = PGDL0(classifier, atk_kwargs['steps'])
-            """
-            self.atk = APG0_CFE(model=classifier, 
-                                mins=torch.tensor(10), # Just some random value 
-                                maxs=torch.tensor(10), # Just some random value
-                                numclasses=10, 
-                                range_min=None, 
-                                range_max=None,
-                                beta=25,
-                                L0=1e-2,
-                                lam0=1e-6,
-                                c=0.0,
-                                prox='zero',
-                                linesearch=False, 
-                                iters=atk_kwargs['steps'],
-                                scale_model=False,
-                                verbose=False,
-                                lam_steps=10
-            )
-            """
+        if atk_kwargs['norm'] == 'GDPR_CFE':
             self.atk= L1_MAD(
                 model=classifier,
                 max_image_range = 1.0,
                 min_image_range = 0.0, 
                 optimizer = torch.optim.Adam, 
                 iters=atk_kwargs['steps'], 
-                lamb=1e-3,
+                lamb=0.1,
                 device= 'cuda:0',
                 mode='natural'
             )
-            
+        elif atk_kwargs['norm'] == 'SCFE':
+            self.atk = APGD0_CFE
         elif atk_kwargs['norm'] == 'L2':
             self.atk = PGDL2(classifier, atk_kwargs['steps'], atk_kwargs['eps'])
         elif atk_kwargs['norm'] == 'Linf':
@@ -73,18 +53,28 @@ class Create:
     
 
     def _generate_and_save_advs(self, imgs: Tensor, target_labels: Tensor) -> None:
-        if isinstance(self.atk, APG0_CFE):
-            maxs = imgs.max().repeat(imgs.view(imgs.shape[0], -1).size(-1))[None,...]
-            mins = imgs.min().repeat(imgs.view(imgs.shape[0], -1).size(-1))[None,...]
-            
-            self.atk.maxs = maxs
-            self.atk.mins = mins
+        if self.atk_kwargs['norm'] == 'SCFE':
+            imgs_flattened = imgs.view(imgs.size(0), -1)
 
-            self.atk.range_min = self.atk.mins.clone().view(self.atk.mins.size(0), -1)
-            self.atk.range_max = self.atk.maxs.clone().view(self.atk.maxs.size(0), -1)
-            advs = self.atk.get_CFs(imgs, target_labels.unsqueeze(1),mode='natural')
-         
-        elif isinstance(self.atk, L1_MAD):
+            maxs = imgs_flattened.max().repeat(imgs_flattened.size(-1))
+            mins = imgs_flattened.min().repeat(imgs_flattened.size(-1))
+            
+            del imgs_flattened
+
+            attack = self.atk(model=self.classifier, 
+                              mins=mins, 
+                              maxs=maxs,
+                              range_max=None,
+                              range_min=None,
+                              lam_steps=5,
+                              scale_model=False,
+                              iters=100,
+                              numclasses=10,
+                              L0=5e-4
+                    )
+
+            advs = attack.get_CFs(imgs, target_labels.unsqueeze(1))
+        elif self.atk_kwargs['norm'] == 'GDPR_CFE':
             self.atk.min_image_range = imgs.min()
             self.atk.max_image_range = imgs.max()
             advs = self.atk.get_perturbations(imgs, target_labels.unsqueeze(1))
@@ -117,7 +107,7 @@ class Create:
 
     def natural(self, dataloader: DataLoader, n_class: int, mode: Literal['rand', 'det']) -> None:
 
-        #orig_imgs = []
+        orig_imgs = []
 
         for imgs, labels in tqdm(dataloader):
             if mode == 'rand':
@@ -127,15 +117,18 @@ class Create:
                 target_labels = (labels + 1) % n_class
             else:
                 raise ValueError(mode)
-            #orig_imgs.append(imgs)
+            orig_imgs.append(imgs)
             self._generate_and_save_advs(imgs, target_labels)
-        """
+        
+        
+        
+        self._save_dataset()
+        
         orig_imgs = torch.cat(orig_imgs)
-        adv_data = torch.load(f'/home/htc/kchitranshi/SCRATCH/temp_CFE_datasets/MNIST_natural_{mode}_{self.atk_kwargs["norm"]}/dataset')['imgs']
+        adv_data = torch.load(f'/home/htc/kchitranshi/SCRATCH/CFE_datasets/CIFAR10_natural_{mode}_{self.atk_kwargs["norm"]}/dataset')['imgs']
         print(f'Average L2 norm across samples {(adv_data.cpu() - orig_imgs.cpu()).norm(p=2,dim=(1,2,3)).mean()}')
         sys.exit()
-        """
-        self._save_dataset()
+        
 
     def uniform(
         self, 
