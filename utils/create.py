@@ -8,10 +8,10 @@ from torch import Tensor
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from .attacks import PGDL0, PGDL2, PGDLinf
+from .attacks import PGDL2, PGDLinf
 from .utils import ModelWithNormalization, get_model_device
-from .cfe import APG0_CFE
-from .l1_mad import L1_MAD
+from .scfe import APG0_CFE
+from .gdpr_cfe import GDPR_CFE
 import sys
 
 class Create:
@@ -26,7 +26,7 @@ class Create:
         self.atk_kwargs = atk_kwargs
 
         if atk_kwargs['norm'] == 'GDPR_CFE':
-            self.atk= L1_MAD(
+            self.atk= GDPR_CFE(
                 model=classifier,
                 max_image_range = 1.0,
                 min_image_range = 0.0, 
@@ -37,7 +37,7 @@ class Create:
                 mode='natural'
             )
         elif atk_kwargs['norm'] == 'SCFE':
-            self.atk = APGD0_CFE
+            self.atk = APG0_CFE
         elif atk_kwargs['norm'] == 'L2':
             self.atk = PGDL2(classifier, atk_kwargs['steps'], atk_kwargs['eps'])
         elif atk_kwargs['norm'] == 'Linf':

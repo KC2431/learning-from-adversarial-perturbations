@@ -13,8 +13,8 @@ from tqdm import tqdm
 from utils.attacks import PGDL0, PGDL2, PGDLinf
 from utils.classifiers import OneHiddenNet
 from utils.utils import all_elements_in_targets, freeze, set_seed
-from utils.cfe import APG0_CFE
-from utils.l1_mad import L1_MAD
+from utils.scfe import APG0_CFE
+from utils.gdpr_cfe import GDPR_CFE
 
 def calc_loss(outs: Tensor, labels: Tensor) -> Tensor:
     assert outs.shape == labels.shape
@@ -152,7 +152,7 @@ class Main(LightningLite):
                 atk = APG0_CFE
         
             else:
-                atk = L1_MAD(
+                atk = GDPR_CFE(
                     model=classifier,
                     max_image_range = 1.0,
                     min_image_range = 0.0, 
