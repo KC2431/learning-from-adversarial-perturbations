@@ -10,6 +10,7 @@ class GDPR_CFE:
                   optimizer = torch.optim.Adam, 
                   iters: int=100, 
                   lamb: float=1.0,
+                  lamb_cf: float=1e-2,
                   mode: str = 'natural',
                   device: str = 'cuda:0',
                   ):
@@ -21,6 +22,7 @@ class GDPR_CFE:
         self.iters = iters
         self.device = device
         self.loss_lambda = lamb
+        self.lambda_cf = lamb_cf
         self.mode=mode
 
     def loss(self, logits, y_true, x, x_adv,mode, lamb):
@@ -43,7 +45,7 @@ class GDPR_CFE:
 
         x_adv = x + 0.01 * torch.rand_like(x)
         x_adv = torch.clamp(x_adv, self.min_image_range, self.max_image_range)
-        optim = self.optimizer([x_adv],lr=0.001)
+        optim = self.optimizer([x_adv],lr=self.lambda_cf)
 
         for i in range(self.iters):
             optim.zero_grad()
