@@ -49,6 +49,7 @@ class CFE(metaclass=ABCMeta):
         self.device = device
         self.dtype = dtype
         self.model.to(device, dtype)
+        freeze(self.model)
         for key in self.__dict__.keys():
             if torch.is_tensor(self.__dict__[key]):
                 self.__dict__[key] = self.__dict__[key].to(device, dtype)
