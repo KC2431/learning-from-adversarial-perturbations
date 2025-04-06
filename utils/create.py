@@ -32,7 +32,8 @@ class Create:
                 min_image_range = 0.0, 
                 optimizer = torch.optim.Adam, 
                 iters=atk_kwargs['steps'], 
-                lamb=0.1,
+                lamb=atk_kwargs['lamb_gdpr'],
+                lamb_cf=atk_kwargs['lamb_cf_gdpr'],
                 device= 'cuda:0',
                 mode='natural'
             )
@@ -66,11 +67,11 @@ class Create:
                               maxs=maxs,
                               range_max=None,
                               range_min=None,
-                              lam_steps=5,
+                              lam_steps=self.atk_kwargs['lamb_steps_scfe'],
                               scale_model=False,
                               iters=100,
                               numclasses=10,
-                              L0=5e-4
+                              L0=self.atk_kwargs['L0_scfe'],
                     )
 
             advs = attack.get_CFs(imgs, target_labels.unsqueeze(1))

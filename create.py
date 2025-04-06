@@ -79,12 +79,20 @@ class Main(LightningLite):
             classifier = ConvNet(n_class)
             atk_kwargs['steps'] = 100 if norm in ('L2', 'Linf') else 100
             atk_kwargs['eps'] = 2 if norm == 'L2' else 0.3 if norm == 'Linf' else None
+            atk_kwargs['lamb_gdpr'] = 0.1
+            atk_kwargs['lamb_cf_gdpr'] = 0.01
+            atk_kwargs['L0_scfe'] = 1e-4
+            atk_kwargs['lamb_steps_scfe'] = 5
 
         elif dataset_name == 'FMNIST':
             #assert not large_epsilon
             classifier = ConvNet(n_class)
             atk_kwargs['steps'] = 100 if norm in ('L2', 'Linf') else 100
             atk_kwargs['eps'] = 2 if norm == 'L2' else 0.3 if norm == 'Linf' else None
+            atk_kwargs['lamb_gdpr'] = 0.01
+            atk_kwargs['lamb_cf_gdpr'] = 0.01
+            atk_kwargs['L0_scfe'] = 1e-5
+            atk_kwargs['lamb_steps_scfe'] = 5
 
         elif dataset_name == 'CIFAR10':
             classifier = WideResNet(28, 10, 0.3, n_class)
@@ -94,6 +102,10 @@ class Main(LightningLite):
             #else:
             atk_kwargs['steps'] = 100 if norm in ('L2', 'Linf') else 100
             atk_kwargs['eps'] = 0.5 if norm == 'L2' else 0.1 if norm == 'Linf' else None
+            atk_kwargs['lamb_gdpr'] = 0.01
+            atk_kwargs['lamb_cf_gdpr'] = 1e-3
+            atk_kwargs['L0_scfe'] = 1e-5
+            atk_kwargs['lamb_steps_scfe'] = 5
 
         elif dataset_name == 'IMAGENETTE':
             classifier = squeezenet1_1()
