@@ -7,7 +7,7 @@ mkdir -p logs
 now=$(TZ=UTC-9 date '+%Y-%m-%d-%H-%M-%S')
 
 devices=${@}
-norms=(L0 L2 Linf)
+norms=(GDPR_CFE SCFE L2 Linf)
 mode=(det)
 seeds=(10)
 seed=${seeds[0]}
