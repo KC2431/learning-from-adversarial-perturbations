@@ -131,13 +131,7 @@ class Main(LightningLite):
         root = '/home/htc/kchitranshi/SCRATCH/CFE_datasets'
         os.makedirs(root, exist_ok=True)
 
-        if norm == 'L0' and is_scfe:
-            fname = f'WaterBirds_SCFE_{mode}'
-        elif norm == 'L0' and not is_scfe:
-            fname = f'WaterBirds_GDPR_CFE_{mode}'
-        else:
-            fname = f'WaterBirds_{norm}_{mode}'
-
+        fname = f'WaterBirds_{norm}_{mode}'
         path = os.path.join(root, fname)
 
         if os.path.exists(path):
@@ -367,9 +361,8 @@ class Main(LightningLite):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('norm', choices=('L0', 'L2', 'Linf'))
+    parser.add_argument('norm', choices=('GDPR_CFE', 'SCFE', 'L2', 'Linf'))
     parser.add_argument('mode', choices=('det'))
-    parser.add_argument('is_scfe', choices=('True', 'False'))
     parser.add_argument('seed', type=int)
     parser.add_argument('devices', nargs='+', type=int)
     args = parser.parse_args()
@@ -381,8 +374,6 @@ if __name__ == '__main__':
         'precision': 16,
     }
     
-    args.is_scfe = True if args.is_scfe == 'True' else False
-
     Main(**lite_kwargs).run(
         args.norm,
         args.mode,
