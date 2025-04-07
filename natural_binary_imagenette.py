@@ -174,15 +174,8 @@ class Main(LightningLite):
                 ]
         ))
 
-        # Loading the indices for English Spaniel dog and Cassette player
-        
         val_data = torch.utils.data.Subset(val_dataset, val_indices)
-
-        # Converting to binary dataset
-        
         val_data = BinaryDataset(val_data, which_dataset='imagenette')
-
-        
         val_dataloader = torch.utils.data.DataLoader(val_data, 
                                                         batch_size=128, 
                                                         shuffle=False,
@@ -215,25 +208,21 @@ class Main(LightningLite):
         print(f'Accuracy of trained model on clean data: {acc * 100:.2f}%')
 
         data_range = (0,1)
-        is_CFE_algo = False
-
-        if norm == 'L0':
-            is_CFE_algo = True
-            steps = 100
-            """
-            atk = L1_MAD(
+        steps=100
+        if norm == 'GDPR_CFE':
+            atk = GDPR_CFE(
                 model=classifier,
                 max_image_range = 1.0,
                 min_image_range = 0.0, 
                 optimizer = torch.optim.Adam, 
                 iters=steps, 
                 lamb=0.11,
+                lamb_cf = 0.0027,
                 mode="artificial",
                 device= 'cuda:0',
             )
-            """
+        elif norm == 'SCFE':
             atk = APG0_CFE
-        
         elif norm == 'L2':
             atk = BinaryPGDL2(classifier=classifier, 
                               steps=100, 
@@ -272,12 +261,11 @@ class Main(LightningLite):
 
             labels = generate_adv_labels(data.shape[0], "cuda:0")
 
-            if not is_CFE_algo:
+            if norm in ['L2','Linf']:
                 adv_data = atk(data, labels)
-            else:
-                """
+            elif norm == 'GDPR_CFE':
                 adv_data = atk.get_perturbations(data, labels.unsqueeze(1))
-                """
+            elif norm == 'SCFE':
                 cfe_atk = atk(model=classifier,
                            range_min=None,
                            range_max=None,
@@ -358,7 +346,7 @@ class Main(LightningLite):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('norm', choices=('L0', 'L2', 'Linf'))
+    parser.add_argument('norm', choices=('GDPR_CFE', 'SCFE', 'L2', 'Linf'))
     parser.add_argument('mode', choices=('det'))
     parser.add_argument('seed', type=int)
     parser.add_argument('devices', nargs='+', type=int)
