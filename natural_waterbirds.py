@@ -227,12 +227,9 @@ class Main(LightningLite):
 
         data_range = (0,1)
 
-        if norm == 'L0':
+        if norm == 'GDPR_CFE':
             steps = 100
-            if is_scfe:
-                atk = APG0_CFE
-            else:
-                atk = GDPR_CFE(
+            atk = GDPR_CFE(
                     model=classifier,
                     max_image_range = 1.0,
                     min_image_range = 0.0, 
@@ -242,6 +239,8 @@ class Main(LightningLite):
                     mode="artificial",
                     device= 'cuda:0',
                 )
+        elif norm == 'SCFE':
+            atk = APG0_CFE
         elif norm == 'L2':
             atk = BinaryPGDL2(classifier=classifier, 
                               steps=100, 
@@ -273,9 +272,9 @@ class Main(LightningLite):
 
             labels = generate_adv_labels(data.shape[0], "cuda:0")
 
-            if norm != 'L0':
+            if norm in ['L2','Linf']:
                 adv_data = atk(data, labels)
-            elif is_scfe and norm == 'L0':
+            elif norm == 'SCFE':
                 data_flattened = data.view(data.size(0), -1)
 
                 maxs = torch.tensor(data_range[1]).repeat(data_flattened.size(-1))
