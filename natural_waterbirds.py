@@ -122,7 +122,6 @@ class Main(LightningLite):
     def run(self,
         norm: Literal['L0', 'L2', 'Linf'],
         mode: Literal['det'],
-        is_scfe: bool,
         seed: int,
     ) -> None:
 
@@ -377,6 +376,5 @@ if __name__ == '__main__':
     Main(**lite_kwargs).run(
         args.norm,
         args.mode,
-        args.is_scfe,
         args.seed,
     )
