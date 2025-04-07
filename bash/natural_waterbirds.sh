@@ -11,7 +11,7 @@ norms=(L2 Linf)
 mode=(det)
 seeds=(10)
 seed=${seeds[0]}
-scfe=(True)
+scfe=(False)
 is_scfe=${scfe[0]}
 
 for mode in "${mode[@]}"; do
