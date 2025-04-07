@@ -131,7 +131,7 @@ class Main(LightningLite):
         root = '/home/htc/kchitranshi/SCRATCH/CFE_datasets'
         os.makedirs(root, exist_ok=True)
 
-        fname = f'Binary_ImageNette_{norm}_{mode}_SCFE' if norm == 'L0' else f'Binary_ImageNette_{norm}_{mode}'
+        fname = f'Binary_ImageNette_{norm}_{mode}'
         path = os.path.join(root, fname)
 
         if os.path.exists(path):
