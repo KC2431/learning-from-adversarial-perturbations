@@ -140,7 +140,6 @@ class Main(LightningLite):
             pathlib.Path(path).touch()
 
         fine_tune_model = True
-
         set_seed(seed)
 
         # Defining transformations
@@ -229,6 +228,7 @@ class Main(LightningLite):
                     optimizer = torch.optim.Adam, 
                     iters=steps, 
                     lamb=0.11,
+                    lamb_cf=0.0027,
                     mode="artificial",
                     device= 'cuda:0',
                 )
