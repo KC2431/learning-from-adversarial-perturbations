@@ -218,9 +218,9 @@ class Main(LightningLite):
         print(f'Accuracy of trained model on clean test data: {test_acc * 100:.2f}%')
 
         data_range = (0,1)
+        steps = 100
 
         if norm == 'GDPR_CFE':
-            steps = 100
             atk = GDPR_CFE(
                     model=classifier,
                     max_image_range = 1.0,
@@ -236,13 +236,13 @@ class Main(LightningLite):
             atk = APG0_CFE
         elif norm == 'L2':
             atk = BinaryPGDL2(classifier=classifier, 
-                              steps=100, 
+                              steps=steps, 
                               eps=3, 
                               data_range=data_range
                 )
         elif norm == 'Linf':
             atk = BinaryPGDLinf(classifier=classifier, 
-                                steps=100, 
+                                steps=steps, 
                                 eps=0.03, 
                                 data_range=data_range
                 )
