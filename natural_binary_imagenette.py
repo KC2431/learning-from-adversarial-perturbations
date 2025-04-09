@@ -225,13 +225,13 @@ class Main(LightningLite):
             atk = APG0_CFE
         elif norm == 'L2':
             atk = BinaryPGDL2(classifier=classifier, 
-                              steps=100, 
+                              steps=steps, 
                               eps=3, 
                               data_range=data_range
                 )
         elif norm == 'Linf':
             atk = BinaryPGDLinf(classifier=classifier, 
-                                steps=100, 
+                                steps=steps, 
                                 eps=0.03, 
                                 data_range=data_range
                 )
