@@ -50,7 +50,7 @@ class BinaryPGDLinf(PGDLinf):
 def fine_tune(classifier, dataloader, train=False, save_model=True) -> float: # type: ignore
     
     epochs = 200
-    optim = Adam(classifier.parameters(), lr=3e-4) if not train else SGD(classifier.parameters(),lr=0.01, momentum=0.9, weight_decay=5e-4)
+    optim = Adam(classifier.parameters(), lr=3e-4) if not train else SGD(classifier.parameters(),lr=0.01, momentum=0.9, weight_decay=5e-4, nesterov=True)
     scheduler = ReduceLROnPlateau(optim)
     
     classifier.train()
