@@ -49,7 +49,6 @@ class CFE(metaclass=ABCMeta):
         self.device = device
         self.dtype = dtype
         self.model.to(device, dtype)
-        freeze(self.model)
         for key in self.__dict__.keys():
             if torch.is_tensor(self.__dict__[key]):
                 self.__dict__[key] = self.__dict__[key].to(device, dtype)
@@ -213,7 +212,7 @@ class APG0_CFE(CFE):
             if self.scale_model:
                 return 2 * super().predict(x) - 1
             else:
-                return super().predict(x)
+                return super().predict(x.view(x.size(0), 3, 224, 224))
         else:
             return super().predict(x.view(x.size(0), 3, 32, 32))
 
@@ -429,7 +428,8 @@ class APG0_CFE(CFE):
         Returns:
             Tensor of shape (n, d)
         '''
-
+        freeze(self.model)
+        self.model.eval()
         print(f'Using SCFE')
 
         assert x.min() >= 0 and x.max() <= 1, "Data is expected to be in [0, 1]"
@@ -490,7 +490,7 @@ class APG0_CFE(CFE):
                 w = torch.clamp(x + w, 0, 1) - x
 
             if self.numclasses == 2:
-                succ = self.predict(x + v) * y > 0
+                succ = self.predict(x + v) * y.view(-1) > 0
             else:
                 succ = self.predict(x + v).argmax(-1) == y.view(-1)
             
@@ -530,7 +530,8 @@ class APG0_CFE(CFE):
         Returns:
             Tensor of shape (n, d)
         '''
-
+        freeze(self.model)
+        self.model.eval()
         print(f'Using SCFE')
 
         assert x.shape[0] == y.shape[0], "Data and target label are expected to have the same number of samples"
