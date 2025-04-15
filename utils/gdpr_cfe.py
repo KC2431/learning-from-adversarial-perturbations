@@ -28,9 +28,15 @@ class GDPR_CFE:
     def loss(self, logits, y_true, x, x_adv,mode, lamb):
         assert y_true.shape == (x.shape[0],), "Target label is expected to be a tensor of shape (n,)"
         assert len(logits.shape) == 2 if mode == 'natural' else len(logits.shape) == 1, "Logits is expected to be a tensor of shape (n, num_classes)"
-        return torch.nn.CrossEntropyLoss()(logits, y_true) + lamb * torch.sum((x - x_adv).pow(2), dim = (1,2,3)).mean() if mode == 'natural' \
-                else (-logits * y_true.cuda()).exp().mean() + lamb * torch.sum((x - x_adv).pow(2), dim = 1).mean()
 
+        if mode == 'natural':
+            return torch.nn.CrossEntropyLoss()(logits, y_true) + lamb * torch.sum((x - x_adv).pow(2), dim = (1,2,3)).mean()
+        elif mode == 'artificial':
+            return (-logits * y_true.cuda()).exp().mean() + lamb * torch.sum((x - x_adv).pow(2), dim = (1,2,3)).mean()
+        elif mode == 'artificial_2d':
+            (-logits * y_true.cuda()).exp().mean() + lamb * torch.sum((x - x_adv).pow(2), dim = 1).mean()
+        else:
+            NotImplementedError
     def get_perturbations(self, x, y):
 
         assert x.min() >= self.min_image_range and x.max() <= self.max_image_range, f"Data is expected to be in the specified range [{self.min_image_range}, {self.max_image_range}]"        
