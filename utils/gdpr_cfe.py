@@ -31,9 +31,9 @@ class GDPR_CFE:
 
         if mode == 'natural':
             return torch.nn.CrossEntropyLoss()(logits, y_true) + lamb * torch.sum((x - x_adv).pow(2), dim = (1,2,3)).mean()
-        elif mode == 'artificial':
+        elif mode == 'natural_binary':
             return (-logits * y_true.cuda()).exp().mean() + lamb * torch.sum((x - x_adv).pow(2), dim = (1,2,3)).mean()
-        elif mode == 'artificial_2d':
+        elif mode == 'artificial':
             (-logits * y_true.cuda()).exp().mean() + lamb * torch.sum((x - x_adv).pow(2), dim = 1).mean()
         else:
             NotImplementedError
