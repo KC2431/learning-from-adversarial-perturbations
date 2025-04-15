@@ -1,4 +1,5 @@
 import argparse
+from collections import OrderedDict
 import os
 import pathlib
 from typing import Any, Dict, Literal
@@ -12,7 +13,7 @@ from tqdm import tqdm
 import torchvision.transforms as T
 import numpy as np
 
-from utils.classifiers.binary_models import BinaryTrainedVGG, BinaryVGG
+from utils.classifiers.binary_models import BinaryTrainedVGG, BinaryVGG, BinaryAlexNet, BinaryTrainedAlexNet
 from utils.datasets import BinaryDataset, SequenceDataset
 from utils.attacks import PGDL0, PGDL2, PGDLinf
 from utils.utils import freeze, set_seed
@@ -49,9 +50,13 @@ class BinaryPGDLinf(PGDLinf):
 
 def fine_tune(classifier, dataloader, train=False, save_model=True) -> float: # type: ignore
     
-    epochs = 200
-    optim = Adam(classifier.parameters(), lr=3e-4) if not train else SGD(classifier.parameters(),lr=0.01, momentum=0.9, weight_decay=5e-4, nesterov=True)
-    scheduler = ReduceLROnPlateau(optim)
+    epochs = 100 if not train else 200 
+    optim = SGD(classifier.parameters(), 
+                lr=1e-4, 
+                momentum=0.9,
+                weight_decay=5e-4,
+                nesterov=True) 
+    scheduler = ReduceLROnPlateau(optim, factor=0.1,threshold=1e-5, verbose=True)
     
     classifier.train()
 
@@ -73,11 +78,9 @@ def fine_tune(classifier, dataloader, train=False, save_model=True) -> float: # 
             print(f'Running loss: {running_loss / len(dataloader.dataset):.2f}')
         if epoch == epochs - 1:
             if save_model:
-                torch.save(classifier.state_dict(), f'./models/waterbirds_clean_{UUID}.pt')
+                torch.save(classifier.state_dict(), f'../SCRATCH/CFE_models/waterbirds_clean_{UUID}.pt')
             return loss.item()
 
-    
-        
 
 @torch.no_grad()
 def test(classifier, dataloader) -> Tensor:
@@ -120,8 +123,7 @@ def generate_adv_labels(n: int, device: torch.device) -> Tensor:
 
 class Main(LightningLite):
     def run(self,
-        norm: Literal['L0', 'L2', 'Linf'],
-        mode: Literal['det'],
+        norm: Literal['GDPR_CFE', 'SCFE', 'L2', 'Linf'],
         seed: int,
     ) -> None:
 
@@ -130,7 +132,7 @@ class Main(LightningLite):
         root = '/home/htc/kchitranshi/SCRATCH/CFE_datasets'
         os.makedirs(root, exist_ok=True)
 
-        fname = f'WaterBirds_{norm}_{mode}'
+        fname = f'WaterBirds_{norm}'
         path = os.path.join(root, fname)
 
         if os.path.exists(path):
@@ -169,7 +171,7 @@ class Main(LightningLite):
         if fine_tune_model:
             train_data = BinaryDataset(train_data, which_dataset='waterbirds')
             train_dataloader = torch.utils.data.DataLoader(train_data, 
-                                                        batch_size=32, 
+                                                        batch_size=64, 
                                                         shuffle=True,
                                                         num_workers=3,
                                                         pin_memory=True
@@ -191,13 +193,12 @@ class Main(LightningLite):
                                                       pin_memory=True
                         )
 
-        model = BinaryTrainedVGG(vgg_type='vgg16')
+        model = BinaryTrainedAlexNet()
         if fine_tune_model:
             model.train()
         else:
             print(f"Loading Pre-trained Model.")
-            state_dict = torch.load("./models/waterbirds_clean.pt", map_location='cpu')
-            #state_dict = OrderedDict((k.replace('resnet.', '',1), v) for k, v in state_dict.items())
+            state_dict = torch.load("../SCRATCH/CFE_models/waterbirds_clean_ec233163-3749-488d-a85e-bb0838ada944.pt", map_location='cpu')
         classifier = ModelWithNormalization(model,
                                             mean=[0.485, 0.456, 0.406], 
                                             std=[0.229, 0.224, 0.225]
@@ -227,9 +228,9 @@ class Main(LightningLite):
                     min_image_range = 0.0, 
                     optimizer = torch.optim.Adam, 
                     iters=steps, 
-                    lamb=0.11,
-                    lamb_cf=0.0027,
-                    mode="artificial",
+                    lamb=1.0,
+                    lamb_cf=0.01,
+                    mode="natural_binary",
                     device= 'cuda:0',
                 )
         elif norm == 'SCFE':
@@ -283,9 +284,10 @@ class Main(LightningLite):
                            iters=steps,
                            maxs=maxs,
                            mins=mins,
-                           lam_steps=5
+                           lam_steps=1,
+                           L0=1e-2
                 )
-                adv_data = cfe_atk.get_CFs_artificial(data.cuda(), labels.unsqueeze(1).cuda())
+                adv_data = cfe_atk.get_CFs(data.cuda(), labels.unsqueeze(1).cuda())
 
                 del maxs
                 del mins
@@ -303,7 +305,7 @@ class Main(LightningLite):
         adv_asr_check_data = SequenceDataset(adv_dataset['imgs'], adv_dataset['labels'],x_transform=None)
 
         adv_dataloader = torch.utils.data.DataLoader(adv_data, 
-                                                        batch_size=32, 
+                                                        batch_size=64, 
                                                         shuffle=True,
                                                         num_workers=3,
                                                         pin_memory=True
@@ -320,7 +322,7 @@ class Main(LightningLite):
         print(f'The attack success rate is {attack_succ_rate * 100:.2f} with an avg L2 norm of {np.mean(avg_L2_norms).item():.2f}')
         print('-'*60)
 
-        adv_model = BinaryVGG(vgg_type='vgg16')
+        adv_model = BinaryAlexNet()
         adv_model.train()
         adv_classifier = ModelWithNormalization(adv_model,
                                             mean=[0.485, 0.456, 0.406], 
@@ -361,7 +363,6 @@ class Main(LightningLite):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('norm', choices=('GDPR_CFE', 'SCFE', 'L2', 'Linf'))
-    parser.add_argument('mode', choices=('det'))
     parser.add_argument('seed', type=int)
     parser.add_argument('devices', nargs='+', type=int)
     args = parser.parse_args()
@@ -375,6 +376,5 @@ if __name__ == '__main__':
     
     Main(**lite_kwargs).run(
         args.norm,
-        args.mode,
         args.seed,
     )
