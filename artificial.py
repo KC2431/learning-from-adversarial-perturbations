@@ -146,7 +146,6 @@ class Main(LightningLite):
 
         if norm not in ['L2','Linf']:
             steps = int(in_dim * perturbation_constraint)
-            #atk = BinaryPGDL0(classifier, steps, data_range=data_range)
             
             if norm == 'SCFE':
                 atk = APG0_CFE
@@ -159,7 +158,8 @@ class Main(LightningLite):
                     optimizer = torch.optim.Adam, 
                     iters=steps, 
                     lamb=1e-2,
-                    mode=mode,
+                    lamb_cf=1e-2,
+                    mode='artificial_2d',
                     device= 'cuda:0',
                 )
         elif norm == 'L2':
