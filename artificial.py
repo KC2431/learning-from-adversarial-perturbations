@@ -159,7 +159,7 @@ class Main(LightningLite):
                     iters=steps, 
                     lamb=1e-2,
                     lamb_cf=1e-2,
-                    mode='artificial_2d',
+                    mode='artificial',
                     device= 'cuda:0',
                 )
         elif norm == 'L2':
