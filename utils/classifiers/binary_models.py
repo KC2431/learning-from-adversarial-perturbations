@@ -136,7 +136,31 @@ class BinaryVGG(nn.Module):
         }
 
         self.model = self.model_dict[vgg_type](weights=None)
-        self.model.classifier[6] = nn.Linear(4096, 1)
+        self.model.classifier[6] = nn.Linear(self.model.classifier[6].in_features, 1)
+
+    def forward(self, x):
+        x = self.model(x)
+        return x.view(-1)
+
+class BinaryAlexNet(nn.Module):
+    def __init__(self):
+        super(BinaryAlexNet, self).__init__()
+        
+        self.model = models.alexnet(weights=None)
+        self.model.classifier[6] = nn.Linear(self.model.classifier[6].in_features, 1)
+
+    def forward(self, x):
+        x = self.model(x)
+        return x.view(-1)
+
+class BinaryTrainedAlexNet(nn.Module):
+    def __init__(self):
+        super(BinaryTrainedAlexNet, self).__init__()
+        
+        self.model = models.alexnet(weights='DEFAULT')
+        for parameter in self.model.parameters():
+            parameter.requires_grad = False
+        self.model.classifier[6] = nn.Linear(self.model.classifier[6].in_features, 1)
 
     def forward(self, x):
         x = self.model(x)
