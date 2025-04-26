@@ -8,17 +8,19 @@ import torch
 from pytorch_lightning.lite import LightningLite
 from torch import Tensor
 from torch.optim import Adam, SGD
+from torch.nn import BCEWithLogitsLoss
+from torch.utils.data import ConcatDataset
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from tqdm import tqdm
 import torchvision.transforms as T
 import numpy as np
 
-from utils.classifiers.binary_models import BinaryTrainedVGG, BinaryVGG, BinaryAlexNet, BinaryTrainedAlexNet
+from utils.classifiers.binary_models import BinaryAlexNet, BinaryTrainedAlexNet
 from utils.datasets import BinaryDataset, SequenceDataset
 from utils.attacks import PGDL0, PGDL2, PGDLinf
 from utils.utils import freeze, set_seed
 from utils.gdpr_cfe import GDPR_CFE
-from utils.scfe import APG0_CFE
+from utils.scfe import APG0_CFE, APG0_CFE_KDE
 from utils.utils import ModelWithNormalization
 
 from wilds import get_dataset
@@ -30,7 +32,8 @@ UUID = uuid4()
 def calc_loss(outs: Tensor, labels: Tensor) -> Tensor:
     assert outs.shape == labels.shape
     assert len(labels.shape) == 1
-    return (- outs * labels.cuda()).exp()
+    criterion = BCEWithLogitsLoss(reduction='none')
+    return criterion(outs, labels)
     
  
 class BinaryPGDL0(PGDL0):
@@ -52,12 +55,13 @@ def fine_tune(classifier, dataloader, train=False, save_model=True) -> float: # 
     
     epochs = 100 if not train else 200 
     optim = SGD(classifier.parameters(), 
-                lr=1e-4, 
+                lr=1e-3,
                 momentum=0.9,
                 weight_decay=5e-4,
-                nesterov=True) 
-    scheduler = ReduceLROnPlateau(optim, factor=0.1,threshold=1e-5, verbose=True)
+                nesterov=True
+            ) 
     
+    scheduler = ReduceLROnPlateau(optim, factor=0.1,threshold=1e-5, verbose=True)
     classifier.train()
 
     for epoch in tqdm(range(epochs)):
@@ -89,15 +93,15 @@ def test(classifier, dataloader) -> Tensor:
     num_correct = 0
     
     for _, (imgs, labels) in enumerate(dataloader):
-        num_landbird = 0 # Number of correct for english spanieel in a batch
-        num_waterbird = 0 # Number of correct for cassette player in a batch
+        num_landbird = 0 
+        num_waterbird = 0 
         assert len(labels.shape) == 1
         num_samples += len(labels)
 
         output = classifier(imgs.cuda())
-        num_correct += ((output * labels.cuda()) > 0).count_nonzero().item()
-        num_landbird += ((output * labels.cuda()) > 0).logical_and(labels.cuda() == -1).count_nonzero().item()
-        num_waterbird += ((output * labels.cuda()) > 0).logical_and(labels.cuda() == 1).count_nonzero().item()
+        num_correct += (output.sigmoid().round() == labels.cuda()).count_nonzero().item()
+        num_landbird += (output.sigmoid().round() == labels.cuda()).logical_and(labels.cuda() == 0).count_nonzero().item()
+        num_waterbird += (output.sigmoid().round() == labels.cuda()).logical_and(labels.cuda() == 1).count_nonzero().item()
         #print(f'num correct for batch {_} is {num_correct} and num_landbird is {num_landbird}, num_waterbird {num_waterbird}')
     return num_correct / num_samples
 
@@ -106,7 +110,7 @@ def get_attack_succ_rate(classifier, dataloader):
     num_succ_attacks = 0
     for _, (adv_img, adv_labels) in enumerate(dataloader):
         pred = classifier(adv_img.cuda())
-        num_succ_attacks += ((pred * adv_labels.cuda()) > 0).count_nonzero().item()
+        num_succ_attacks += (pred.sigmoid().round() == adv_labels.cuda()).count_nonzero().item()
 
     return num_succ_attacks / len(dataloader.dataset)
 
@@ -157,7 +161,7 @@ class Main(LightningLite):
             T.RandomHorizontalFlip(),
         ])
 
-        val_transform = test_transform = T.Compose([
+        val_transform = T.Compose([
             T.Resize(256),
             T.CenterCrop(224),
             T.ToTensor()
@@ -166,7 +170,9 @@ class Main(LightningLite):
         dataset = get_dataset(dataset="waterbirds", download=False,root_dir='../SCRATCH/')
         train_data = dataset.get_subset("train", transform=train_transform)
         val_data = dataset.get_subset("val", transform=val_transform)
-        test_data = dataset.get_subset("test", transform=test_transform)
+        test_data = dataset.get_subset("test", transform=train_transform)
+
+        train_data = ConcatDataset([train_data, val_data])
 
         if fine_tune_model:
             train_data = BinaryDataset(train_data, which_dataset='waterbirds')
@@ -178,27 +184,19 @@ class Main(LightningLite):
                         )
 
         val_data = BinaryDataset(val_data, which_dataset='waterbirds')
-        test_data = BinaryDataset(test_data, which_dataset='waterbirds')
-        
         val_dataloader = torch.utils.data.DataLoader(val_data, 
                                                         batch_size=128, 
                                                         shuffle=False,
                                                         num_workers=3,
                                                         pin_memory=True
                         )
-        test_dataloader = torch.utils.data.DataLoader(test_data,
-                                                      batch_size=128,
-                                                      shuffle=False,
-                                                      num_workers=3,
-                                                      pin_memory=True
-                        )
-
+    
         model = BinaryTrainedAlexNet()
         if fine_tune_model:
             model.train()
         else:
             print(f"Loading Pre-trained Model.")
-            state_dict = torch.load("../SCRATCH/CFE_models/waterbirds_clean_ec233163-3749-488d-a85e-bb0838ada944.pt", map_location='cpu')
+            state_dict = torch.load("../SCRATCH/CFE_models/waterbirds_clean_aef0d5d5-34a1-4250-a027-867b89f352f8.pt", map_location='cpu')
         classifier = ModelWithNormalization(model,
                                             mean=[0.485, 0.456, 0.406], 
                                             std=[0.229, 0.224, 0.225]
@@ -207,16 +205,15 @@ class Main(LightningLite):
             classifier.load_state_dict(state_dict)
 
         classifier = self.setup(classifier)
-        loss = fine_tune(classifier, train_dataloader) if fine_tune_model else None
+        loss = fine_tune(classifier, train_dataloader, save_model=True) if fine_tune_model else None
         freeze(classifier)
         classifier.eval()
 
         val_acc = test(classifier, val_dataloader)
-        test_acc = test(classifier, test_dataloader)
 
         print('-'*60)
         print(f'Accuracy of trained model on clean validation data: {val_acc * 100:.2f}%')
-        print(f'Accuracy of trained model on clean test data: {test_acc * 100:.2f}%')
+        print('-'*60)
 
         data_range = (0,1)
         steps = 100
@@ -228,8 +225,8 @@ class Main(LightningLite):
                     min_image_range = 0.0, 
                     optimizer = torch.optim.Adam, 
                     iters=steps, 
-                    lamb=1.0,
-                    lamb_cf=0.01,
+                    lamb=1e-1,
+                    lamb_cf=1e-2,
                     mode="natural_binary",
                     device= 'cuda:0',
                 )
@@ -249,18 +246,25 @@ class Main(LightningLite):
                 )
         else:
             raise ValueError(norm)
-        
+
+        del train_data 
         adv_dataset = {'imgs': [], 'labels': []}
         
-        adv_attack_data = dataset.get_subset("train", transform=val_transform)
-        adv_attack_data = BinaryDataset(adv_attack_data, which_dataset='waterbirds')
+        adv_attack_data_1 = dataset.get_subset("train", transform=val_transform)
+        adv_attack_data_2 = dataset.get_subset("test", transform=val_transform)
 
+        adv_attack_data = ConcatDataset([adv_attack_data_1, adv_attack_data_2])
+        adv_attack_data = BinaryDataset(adv_attack_data, which_dataset='waterbirds')
         adv_attack_loader = torch.utils.data.DataLoader(adv_attack_data, 
-                                                        batch_size=64, 
+                                                        batch_size=128, 
                                                         shuffle=False,
                                                         num_workers=3,
                                                         pin_memory=True
                             )
+
+        del adv_attack_data_1
+        del adv_attack_data_2
+
         avg_L2_norms = []
         for _, (data, _) in tqdm(enumerate(adv_attack_loader)):
 
@@ -284,7 +288,7 @@ class Main(LightningLite):
                            iters=steps,
                            maxs=maxs,
                            mins=mins,
-                           lam_steps=1,
+                           lam_steps=4,
                            L0=1e-2
                 )
                 adv_data = cfe_atk.get_CFs(data.cuda(), labels.unsqueeze(1).cuda())
@@ -337,7 +341,6 @@ class Main(LightningLite):
         adv_acc_for_natural_test = test(adv_classifier, test_dataloader)
         
         print(f'Accuracy of Adversarially trained model on clean validation data: {adv_acc_for_natural_val * 100:.2f}%')
-        print(f'Accuracy of Adversarially trained model on clean test data: {adv_acc_for_natural_test * 100:.2f}%')
         
         print('='*60)
         print('='*60)
