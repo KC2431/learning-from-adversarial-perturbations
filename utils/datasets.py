@@ -1,10 +1,13 @@
 from typing import Any, Callable, Optional, Tuple
-
+from xml.etree import ElementTree as ET
 import torchvision
 import torchvision.transforms as T
 from torch.utils.data import Dataset
 from torch.utils.data.dataset import Dataset
-
+from torch.utils.data import DataLoader
+import os
+from PIL import Image
+import torch
 
 class SequenceDataset(Dataset):
     def __init__(
@@ -169,12 +172,14 @@ class FOOD101(torchvision.datasets.Food101):
 
 # Add normalization to the pipeline
             transform = T.Compose([
-                    T.Resize(256),
+                    #T.Resize((232,232)),
+                    #T.RandomHorizontalFlip(),
+                    #T.RandomVerticalFlip(),
+                    #T.RandomRotation(degrees=45),
+                    #T.ColorJitter(brightness=0.5, contrast=0.5, saturation=0.5, hue=0.5),
+                    #T.CenterCrop(224),
+                    T.RandomResizedCrop(224),
                     T.RandomHorizontalFlip(),
-                    T.RandomVerticalFlip(),
-                    T.RandomRotation(degrees=45),
-                    T.ColorJitter(brightness=0.5, contrast=0.5, saturation=0.5, hue=0.5),
-                    T.CenterCrop(224),
                     T.ToTensor(),
             ])
             
@@ -189,6 +194,63 @@ class FOOD101(torchvision.datasets.Food101):
         split = 'train' if train else 'test'
         super().__init__(root=root, split=split, transform=transform, target_transform=target_transform)
 
+class IMAGENETTE(torchvision.datasets.Imagenette):
+
+    mean=[0.485, 0.456, 0.406]
+    std=[0.229, 0.224, 0.225]
+    n_class = 10
+    size=(3, 224, 224)
+    dim = size[0] * size[1] * size[2]
+
+    def __init__(self, 
+        root: str, 
+        train: bool, 
+        transform: Optional[Callable] = None, 
+        target_transform: Optional[Callable] = None
+    ) -> None:
+        pass
+
+        if train and transform is None:
+
+# Add normalization to the pipeline
+            transform = T.Compose([
+                    T.RandomResizedCrop(224),
+                    T.RandomHorizontalFlip(),
+                    T.ToTensor(),
+            ])
+            
+
+        elif not train and transform is None:
+            
+            transform = T.Compose([
+                T.Resize(256),
+                T.CenterCrop(224),
+                T.ToTensor(),
+            ])
+        split = 'train' if train else 'val'
+        super().__init__(root=root, split=split, transform=transform, target_transform=target_transform)
+
+class BinaryDataset(Dataset):
+    def __init__(self, original_dataset,which_dataset = 'imagenette'):
+        self.dataset = original_dataset
+        self.which_dataset = which_dataset
+    def __getitem__(self, index):
+        if self.which_dataset == 'imagenette':
+            img, label = self.dataset[index]  # Get original image and label
+        elif self.which_dataset == 'waterbirds':
+            img, label, _ = self.dataset[index]  # Get original image and label
+        if self.which_dataset == 'imagenette':
+            new_label = -1 if label == 1 else 1  # Change label
+        elif self.which_dataset == 'waterbirds':
+            new_label = label.float()
+        else:
+            return NotImplementedError
+        return img, new_label  # Return modified sample
+
+    def __len__(self):
+        return len(self.dataset)
+
+
 class DatasetWrapper(Dataset):
     def __init__(self, dataset, transform):
         self.dataset = dataset
@@ -202,33 +264,79 @@ class DatasetWrapper(Dataset):
         img = self.transform(img)
         return img, label
 
-'''
-from typing import List
+VOC_CLASSES = [
+    'aeroplane', 'bicycle', 'bird', 'boat', 'bottle', 'bus', 'car', 'cat',
+    'chair', 'cow', 'diningtable', 'dog', 'horse', 'motorbike', 'person',
+    'pottedplant', 'sheep', 'sofa', 'train', 'tvmonitor'
+]
 
-import torch
+class VOCDataset(Dataset):
+    def __init__(self, image_ids, root_dir, transform=None):
+        self.image_ids = image_ids
+        self.root_dir = root_dir
+        self.transform = transform
 
+    def __len__(self):
+        return len(self.image_ids)
 
-class CIFAR10Sub(CIFAR10):
-    def __init__(
-        self, 
-        root: str, 
-        train: bool, 
-        use_classes: List[int],
-        transform: Optional[Callable] = None, 
-        target_transform: Optional[Callable] = None,
-    ) -> None:
-        super().__init__(root, train, transform, target_transform)
+    def __getitem__(self, idx):
+        img_id = self.image_ids[idx]
+        img_path = os.path.join(self.root_dir, "JPEGImages", f"{img_id}.jpg")
+        xml_path = os.path.join(self.root_dir, "Annotations", f"{img_id}.xml")
+        
+        # Load image
+        image = Image.open(img_path).convert("RGB")
+        
+        # Load multi-label annotations
+        labels = self._parse_voc_xml(xml_path)
+        
+        if self.transform:
+            image = self.transform(image)
+        
+        return image, labels
 
-        self.n_class = len(use_classes)
+    def _parse_voc_xml(self, xml_path):
+        tree = ET.parse(xml_path)
+        root = tree.getroot()
+        labels = torch.zeros(20, dtype=torch.float32)
+        
+        for obj in root.findall("object"):
+            class_name = obj.find("name").text
+            if class_name in VOC_CLASSES:
+                labels[VOC_CLASSES.index(class_name)] = 1.0
+        return labels
 
-        self.targets = torch.tensor(self.targets)
-        indices = torch.zeros(len(self.targets), dtype=bool)
-        for c in use_classes:
-            indices.logical_or_(self.targets == c)
-            
-        self.data = self.data[indices]
-        self.targets = self.targets[indices]
+class VOCAugmentedDataset(Dataset):
+    def __init__(self, image_ids, root_dir, transform=None):
+        self.image_ids = image_ids
+        self.root_dir = root_dir
+        self.transform = transform
 
-        for i, c in enumerate(use_classes):
-            self.targets[self.targets == c] = i
-'''
+    def __len__(self):
+        return len(self.image_ids)
+
+    def __getitem__(self, idx):
+        img_id = self.image_ids[idx]
+        img_path = f"{self.root_dir}/JPEGImages/{img_id}.jpg"
+        xml_path = f"{self.root_dir}/Annotations/{img_id}.xml"
+        
+        image = Image.open(img_path).convert("RGB")
+        labels = self._parse_voc_xml(xml_path)  # Returns [20] tensor (multi-label)
+        
+        if self.transform:
+            images = self.transform(image)  # List of 10 augmented tensors
+            labels = labels.repeat(10, 1)   # Repeat labels for each augmentation
+            return images, labels           # Shapes: [10,3,227,227], [10,20]
+        return image, labels
+
+    def _parse_voc_xml(self, xml_path):
+        # Parse XML and return multi-hot vector [20]
+        tree = ET.parse(xml_path)
+        root = tree.getroot()
+        labels = torch.zeros(20, dtype=torch.float32)
+        for obj in root.findall("object"):
+            class_name = obj.find("name").text
+            if class_name in VOC_CLASSES:
+                labels[VOC_CLASSES.index(class_name)] = 1.0
+        return labels
+
