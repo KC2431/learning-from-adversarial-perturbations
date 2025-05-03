@@ -234,7 +234,35 @@ class APG0_CFE(CFE):
         if active is None:
             active = torch.ones_like(self.lam, dtype=torch.bool)
         if self.numclasses == 2 and self.lam0 != 0:
-            classloss = self.lam[active.view(-1)] * torch.relu(-y * self.predict(x + w) + self.c) # x and w are flattened
+            classloss = self.lam[active.view(-1)] * torch.relu(-y.view(-1) * self.predict(x + w) + self.c) # x and w are flattened
+        elif self.lam0 != 0:
+            logits = self.predict(x + w) # x and w are unflattened
+            one_hot_y = F.one_hot(y.view(-1), self.numclasses)
+            Z_t = torch.sum(logits * one_hot_y, dim=1, keepdim=True)
+            Z_i = torch.amax(logits * (1 - one_hot_y) - (one_hot_y * 1e5), dim=1, keepdim=True)
+            classloss = self.lam[active.view(-1)] * F.relu(Z_i - Z_t + self.c)
+        else:
+            classloss = 0
+        return classloss + (w ** 2).view(w.size(0), -1).sum(dim=-1, keepdim=True)
+    
+    def loss_natural_binary(self, x: Tensor, w: Tensor, y: Tensor, active: Tensor | None = None) -> Tensor:
+        '''
+        Compute the l2 regularized classification loss.
+
+        Arguments:
+            x:      Tensor of shape (n, d) expected to be in [0, 1],
+                    the original data
+            w:      Tensor of shape (n, d), the perturbation
+            y:      Tensor of shape (n, 1) expected to be in {-1, 1},
+                    the target label
+            active: Tensor | None, mask indicating active elements.
+        Returns:
+            Tensor of shape (n, 1)
+        '''
+        if active is None:
+            active = torch.ones_like(self.lam, dtype=torch.bool)
+        if self.numclasses == 2 and self.lam0 != 0:
+            classloss = self.lam[active.view(-1)] * torch.nn.CrossEntropyLoss(reduction='none')(self.predict(x + w), y.view(-1))
         elif self.lam0 != 0:
             logits = self.predict(x + w) # x and w are unflattened
             one_hot_y = F.one_hot(y.view(-1), self.numclasses)
@@ -373,6 +401,26 @@ class APG0_CFE(CFE):
         w.detach_()
         return grad, loss.detach()
     
+    def get_grad_loss_natural_binary(self, x: Tensor, w: Tensor, y: Tensor) -> Tensor:
+        '''
+        Compute the gradient and loss.
+
+        Arguments:
+            x: Tensor of shape (n, d) expected to be in [0, 1],
+               the original data
+            w: Tensor of shape (n, d), the perturbation
+            y: Tensor of shape (n, 1) expected to be in {-1, 1},
+               the target label
+        Returns:
+            Tuple of Tensors of shape (n, d) and (n, 1)
+        '''
+        with torch.enable_grad():
+            w.requires_grad = True
+            loss = self.loss_natural_binary(x, w, y)
+            grad = torch.autograd.grad(loss.sum(), w)[0]
+        w.detach_()
+        return grad, loss.detach()
+    
 
     def backtrack_line_search(self, x: Tensor, w: Tensor, y: Tensor, grad: Tensor, loss: Tensor, L: Tensor) -> Tensor:
         '''
@@ -468,7 +516,6 @@ class APG0_CFE(CFE):
                     s2 = ''.join([' ' for _ in range(len(str(self.lam_steps)) - len(str(step+1)))])
                     print(f"\rSearch step {s2}{step+1}/{self.lam_steps}, APG0 Iteration {s1}{i+1}/{self.iters}  ", end='')
 
-                #print(f'w max: {w.max()}, w.min: {w.min()}')
 
                 grad, loss = self.get_grad_loss(x, w, y)
                 if self.linesearch:
@@ -517,7 +564,103 @@ class APG0_CFE(CFE):
 
         print(f'Number of successful CFs: {(self.predict(x + best_w).argmax(-1) == y.view(-1)).float().sum():.2f}')
         return ((x + best_w).view(B, C, H, W)).detach()
-    
+
+    def get_CFs_natural_binary(self, x: Tensor, y: Tensor) -> Tensor:
+        '''
+        Compute the counterfactuals using the APG0 algorithm.
+
+        Arguments:
+            x: Tensor of shape (n, d) expected to be in [0, 1],
+               the original data
+            y: Tensor of shape (n, 1) expected to be in {-1, 1},
+               the target label
+        Returns:
+            Tensor of shape (n, d)
+        '''
+        freeze(self.model)
+        self.model.eval()
+        print(f'Using SCFE')
+
+        assert x.min() >= 0 and x.max() <= 1, "Data is expected to be in [0, 1]"
+        assert x.shape[0] == y.shape[0], "Data and target label are expected to have the same number of samples"
+        assert len(y.shape) == 2 and y.shape[1] == 1, "Target label is expected to be a tensor of shape (n, 1)"
+        if self.numclasses == 2:
+            mask1 = y == 1
+            mask2 = y == 0
+            assert (mask1 | mask2).all(), "Classes are expected to be in {-1, 1}"
+        else:
+            mask = y.view(y.size(0), 1) == torch.arange(self.numclasses, device=self.device, dtype=y.dtype).view(1, -1)
+            assert (mask.any(-1)).all(), "Classes are expected to be in {0, ..., numclasses-1}"
+
+
+        B, C, H, W = x.shape
+        x = x.view(B, -1).clone()
+
+        best_w = torch.zeros_like(x)
+        best_norm = torch.full((x.size(0),), torch.inf, dtype=self.dtype, device=self.device)
+        self.lam = torch.full((x.size(0), 1), self.lam0, device=self.device, dtype=self.dtype)
+        lam_lb = torch.zeros_like(self.lam)
+        lam_ub = torch.full_like(self.lam, 1e10)
+
+        for step in range(self.lam_steps):
+            w = torch.zeros_like(x)
+            v = torch.zeros_like(x)
+            v_old = torch.zeros_like(x)
+            t = 1.0
+            t_old = 1.0
+            L0 = self.L0 if self.linesearch else 1 / self.L0
+            L = torch.full_like(y, L0, dtype=self.dtype).view(y.size(0), *([1] * (x[0].dim())))
+
+            for i in range(self.iters):
+                if self.verbose:
+                    s1 = ''.join([' ' for _ in range(len(str(self.iters)) - len(str(i+1)))])
+                    s2 = ''.join([' ' for _ in range(len(str(self.lam_steps)) - len(str(step+1)))])
+                    print(f"\rSearch step {s2}{step+1}/{self.lam_steps}, APG0 Iteration {s1}{i+1}/{self.iters}  ", end='')
+
+
+                grad, loss = self.get_grad_loss_natural_binary(x, w, y)
+                if self.linesearch:
+                    L = self.backtrack_line_search(x, w, y, grad, loss, L)
+                else:
+                    # step size decay
+                    # we take the reciprocal twice since L is applied as 1 / L
+                    L = 1 / (1 / L * math.sqrt(1 - i / self.iters))
+                
+                #print(f'Number of iters: {i}, lam_step: {step}')
+
+                # FISTA update
+                v_old = v.clone()
+                v = self.prox(w - 1 / L * grad, x, L)
+                t_old = t
+                t = 0.5 * (1 + math.sqrt(1 + 4 * t_old ** 2))
+                w = v + ((t_old - 1) / t) * (v - v_old)
+
+                w = torch.clamp(x + w, 0, 1) - x
+            
+            succ = self.predict(x + v).argmax(-1) == y.view(-1)
+        
+            succ = succ.view(-1)
+            if self.lam_steps == 1:
+                best_w = v.clone()
+                best_norm = v.norm(p=0, dim=-1)
+            # save the sparsest successful CF so far
+            better = (best_norm > v.norm(p=0, dim=-1)) & succ
+            best_norm[better] = v[better].norm(p=0, dim=-1)
+            best_w[better] = v[better].clone()
+            # increase weight of the classification loss if no CF was found
+            # and decrease if one was found
+            lam_ub[succ] = self.lam[succ]
+            lam_lb[~succ] = self.lam[~succ]
+            mask = lam_ub < 1e9
+            self.lam[mask] = (lam_ub[mask] + lam_lb[mask]) / 2
+            self.lam[~mask] *= 10
+        
+        if self.verbose:
+            print('')
+
+        print(f'Number of successful CFs: {(self.predict(x + best_w).argmax(-1) == y.view(-1)).float().sum():.2f}')
+        return ((x + best_w).view(B, C, H, W)).detach()
+
     def get_CFs_artificial(self, x: Tensor, y: Tensor) -> Tensor:
         '''
         Compute the counterfactuals using the APG0 algorithm.
@@ -533,6 +676,11 @@ class APG0_CFE(CFE):
         freeze(self.model)
         self.model.eval()
         print(f'Using SCFE')
+
+        if self.numclasses == 2:
+            mask1 = y == 1
+            mask2 = y == -1
+            assert (mask1 | mask2).all(), "Classes are expected to be in {-1, 1}"
 
         assert x.shape[0] == y.shape[0], "Data and target label are expected to have the same number of samples"
         assert len(y.shape) == 1, "Target label is expected to be a tensor of shape (n, 1)"

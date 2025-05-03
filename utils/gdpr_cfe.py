@@ -27,14 +27,14 @@ class GDPR_CFE:
 
     def loss(self, logits, y_true, x, x_adv,mode, lamb):
         assert y_true.shape == (x.shape[0],), "Target label is expected to be a tensor of shape (n,)"
-        assert len(logits.shape) == 2 if mode == 'natural' else len(logits.shape) == 1, "Logits is expected to be a tensor of shape (n, num_classes)"
+        assert len(logits.shape) == 2 if mode in ['natural','natural_binary'] else len(logits.shape) == 1, "Logits is expected to be a tensor of shape (n, num_classes)"
 
         if mode == 'natural':
             return torch.nn.CrossEntropyLoss()(logits, y_true) + lamb * torch.sum((x - x_adv).pow(2), dim = (1,2,3)).mean()
         elif mode == 'natural_binary':
-            return (-logits * y_true.cuda()).exp().mean() + lamb * torch.sum((x - x_adv).pow(2), dim = (1,2,3)).mean()
+            return torch.nn.CrossEntropyLoss()(logits, y_true) + lamb * torch.sum((x - x_adv).pow(2), dim = (1,2,3)).mean()
         elif mode == 'artificial':
-            (-logits * y_true.cuda()).exp().mean() + lamb * torch.sum((x - x_adv).pow(2), dim = 1).mean()
+            return (-logits * y_true.cuda()).exp().mean() + lamb * torch.sum((x - x_adv).pow(2), dim = 1).mean()
         else:
             NotImplementedError
     def get_perturbations(self, x, y):
