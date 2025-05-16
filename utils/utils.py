@@ -2,6 +2,7 @@ from typing import List, Literal, Union
 
 import torch
 from lightning_lite.utilities.seed import seed_everything
+import json
 from pytorch_lightning.lite import LightningLite
 from torch import Tensor
 from torch.nn import Module
@@ -25,6 +26,15 @@ def freeze(model: Module) -> None:
     for p in model.parameters():
         p.requires_grad = False
 
+class ExpLoss(Module):
+    def __init__(self):
+        super(ExpLoss, self).__init__()
+
+    def forward(self, logits, labels):
+        assert logits.shape == labels.shape
+        assert len(logits.shape) == len(labels.shape) == 1
+        return (- logits * labels).exp()
+    
 
 def get_model_device(model: Module) -> torch.device:
     return next(model.parameters()).device
@@ -68,6 +78,16 @@ class ModelWithNormalization(Module):
         assert in_range(x, 0, 1)
         return self.model(normalize(x, self.mean, self.std))
 
+class CustomDataset(Dataset):
+    def __init__(self, data_dict):
+        self.imgs = data_dict["imgs"]
+        self.labels = data_dict["labels"]
+
+    def __len__(self):
+        return len(self.labels)
+
+    def __getitem__(self, idx):
+        return self.imgs[idx], self.labels[idx]
 
 class CalcClassificationAcc(LightningLite):
     def run(
@@ -94,3 +114,15 @@ class CalcClassificationAcc(LightningLite):
         
         acc = metric.compute()
         return acc.tolist() if average == 'none' else acc.item()
+""" 
+def load_config(config_path: str) -> Dict[str, Any]:
+            config = json.load(f)
+        print(f"Successfully loaded configuration from {config_path}")
+        return config
+    except FileNotFoundError:
+        print(f"Configuration file not found at {config_path}")
+        raise
+    except json.JSONDecodeError:
+        print(f"Error parsing JSON configuration file at {config_path}")
+        raise 
+"""

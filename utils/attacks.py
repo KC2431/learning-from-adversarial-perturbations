@@ -70,7 +70,7 @@ class PGD(ABC):
 
             loss = losses.sum()
             grads, = torch.autograd.grad(loss, advs)
-
+            
             advs = self._project(advs, grads, orig_imgs)
 
 

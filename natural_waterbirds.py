@@ -52,17 +52,16 @@ class BinaryPGDLinf(PGDLinf):
         return calc_loss(outs, targets)
     
 
-def fine_tune(classifier, dataloader, train=False, save_model=True) -> float: # type: ignore
+def fine_tune(classifier, dataloader, train=False, save_model=True, seed=10) -> float: # type: ignore
     
-    epochs = 360 
+    epochs = 113 
     optim = SGD(classifier.parameters(), 
-                lr=1e-5,
+                lr=1e-3,
                 momentum=0.9,
-                weight_decay=5e-2,
+                weight_decay=1e-4,
                 nesterov=False
             ) 
     
-    scheduler = ReduceLROnPlateau(optim, factor=0.1,threshold=1e-7, verbose=True)
     classifier.train()
 
     for epoch in tqdm(range(epochs)):
@@ -80,13 +79,11 @@ def fine_tune(classifier, dataloader, train=False, save_model=True) -> float: # 
             optim.step()
             running_loss += loss.item() * imgs.size(0)
 
-        scheduler.step(running_loss/ len(dataloader.dataset))
-        
         if epoch % 20 == 0:
             print(f'Running loss: {running_loss / len(dataloader.dataset):.2f}')
         if epoch == epochs - 1:
             if save_model:
-                torch.save(classifier.state_dict(), f'../SCRATCH/CFE_models/waterbirds_clean_{UUID}.pt')
+                torch.save(classifier.state_dict(), f'../SCRATCH/CFE_models/waterbirds_clean_seed_{seed}_{UUID}.pt')
             return loss.item()
 
 
@@ -140,7 +137,7 @@ class Main(LightningLite):
         root = '/home/htc/kchitranshi/SCRATCH/CFE_datasets'
         os.makedirs(root, exist_ok=True)
 
-        fname = f'WaterBirds_{norm}'
+        fname = f'WaterBirds_{norm}_seed_{seed}'
         path = os.path.join(root, fname)
 
         if os.path.exists(path):
@@ -150,15 +147,14 @@ class Main(LightningLite):
             pathlib.Path(path).touch()
 
         # Fine tuning the model and setting the seed
-        fine_tune_model = False
+        fine_tune_model = True
         set_seed(seed)
 
         # Defining transformations
         train_transform = T.Compose([
-            T.Resize(256),
-            T.RandomResizedCrop(224),
-            T.RandomHorizontalFlip(),
-            T.ToTensor()
+            T.Resize((int(224 * (256 / 224)), int(224 * (256 / 224)),)),
+            T.CenterCrop(224),
+            T.ToTensor(),
         ])
 
         adv_train_transform = T.Compose([
@@ -167,14 +163,15 @@ class Main(LightningLite):
         ])
 
         val_transform = T.Compose([
-            T.Resize(256),
+            T.Resize((int(224 * (256 / 224)), int(224 * (256 / 224)),)),
             T.CenterCrop(224),
-            T.ToTensor()
+            T.ToTensor(),
         ])
 
         # Loading the datasets
         dataset = get_dataset(dataset="waterbirds", download=False,root_dir='../SCRATCH/')
         train_data = dataset.get_subset("train", transform=train_transform)
+        train_test_data = dataset.get_subset("train", transform=val_transform)
         val_data = dataset.get_subset("val", transform=val_transform)
         test_data = dataset.get_subset("test", transform=val_transform)
 
@@ -182,7 +179,7 @@ class Main(LightningLite):
         if fine_tune_model:
             train_data = BinaryDataset(train_data, which_dataset='waterbirds')
             train_dataloader = torch.utils.data.DataLoader(train_data, 
-                                                        batch_size=8, 
+                                                        batch_size=108, 
                                                         shuffle=True,
                                                         num_workers=3,
                                                         pin_memory=True
@@ -203,13 +200,20 @@ class Main(LightningLite):
                                                         num_workers=3,
                                                         pin_memory=True
                         )
+        train_test_data = BinaryDataset(train_test_data, which_dataset='waterbirds')
+        train_test_dataloader = torch.utils.data.DataLoader(train_test_data, 
+                                                        batch_size=128, 
+                                                        shuffle=False,
+                                                        num_workers=3,
+                                                        pin_memory=True
+                        )
         # Loading the model
-        model = BinaryTrainedResNet('resnet50')
+        model = BinaryTrainedResNet('resnet50', num_classes=2)
         if fine_tune_model:
             model.train()
         else:
             print(f"Loading Pre-trained Model.")
-            state_dict = torch.load("../SCRATCH/CFE_models/waterbirds_clean_a6676e20-4c61-45e6-97a0-54d9f9929c5a.pt", map_location='cpu')
+            state_dict = torch.load("../SCRATCH/CFE_models/waterbirds_clean_cef6e3ae-5f70-40ce-af81-c78d0f4080d4.pt", map_location='cpu')
             #035084af-b895-433b-bdf9-46cba06e8f51 a6676e20-4c61-45e6-97a0-54d9f9929c5a
         classifier = ModelWithNormalization(model,
                                             mean=[0.485, 0.456, 0.406], 
@@ -220,13 +224,14 @@ class Main(LightningLite):
 
         # Fine Tuning the classifier
         classifier = self.setup(classifier)
-        loss = fine_tune(classifier, train_dataloader, save_model=True) if fine_tune_model else None
+        loss = fine_tune(classifier, train_dataloader, save_model=True, seed=seed) if fine_tune_model else None
         freeze(classifier)
         classifier.eval()
 
         # Calculating accuracy on validation and test sets
         val_acc = test(classifier, val_dataloader)
         test_acc = test(classifier, test_dataloader)
+        train_test_acc = test(classifier, train_test_dataloader)
 
         print('-'*60)
         print(f'Accuracy of trained model on clean validation data: {val_acc * 100:.2f}%')
@@ -234,6 +239,10 @@ class Main(LightningLite):
 
         print('-'*60)
         print(f'Accuracy of trained model on clean test data: {test_acc * 100:.2f}%')
+        print('-'*60)
+
+        print('-'*60)
+        print(f'Accuracy of trained model on training data: {train_test_acc * 100:.2f}%')
         print('-'*60)
 
         data_range = (0,1)
@@ -326,11 +335,11 @@ class Main(LightningLite):
         adv_dataset['labels'] = torch.cat(adv_dataset['labels'])
 
         # Defining the dataloaders for the adversarial/CFE data
-        adv_data = SequenceDataset(adv_dataset['imgs'], adv_dataset['labels'],x_transform=adv_train_transform)
+        adv_data = SequenceDataset(adv_dataset['imgs'], adv_dataset['labels'],x_transform=None)#adv_train_transform)
         adv_asr_check_data = SequenceDataset(adv_dataset['imgs'], adv_dataset['labels'],x_transform=None)
 
         adv_dataloader = torch.utils.data.DataLoader(adv_data, 
-                                                        batch_size=8, 
+                                                        batch_size=108, 
                                                         shuffle=True,
                                                         num_workers=3,
                                                         pin_memory=True
@@ -349,7 +358,7 @@ class Main(LightningLite):
         print('-'*60)
 
         # Intialising the Adversarial model
-        adv_model = BinaryTrainedResNet(resnet_type='resnet50')
+        adv_model = BinaryTrainedResNet(resnet_type='resnet50', num_classes=2)
         adv_model.train()
         adv_classifier = ModelWithNormalization(adv_model,
                                             mean=[0.485, 0.456, 0.406], 
@@ -363,6 +372,7 @@ class Main(LightningLite):
         # Checking its accuracy on validation/test sets
         adv_acc_for_natural_val = test(adv_classifier, val_dataloader)
         adv_acc_for_natural_test = test(adv_classifier, test_dataloader)
+        adv_acc_for_natural_train_test = test(adv_classifier, train_test_dataloader)
 
         print('-'*60)       
         print(f'Accuracy of Adversarially trained model on clean validation data: {adv_acc_for_natural_val * 100:.2f}%')
@@ -370,6 +380,10 @@ class Main(LightningLite):
 
         print('-'*60)
         print(f'Accuracy of Adversarially trained model on clean test data: {adv_acc_for_natural_test * 100:.2f}%')
+        print('-'*60)
+
+        print('-'*60)
+        print(f'Accuracy of Adversarially trained model on clean train data: {adv_acc_for_natural_train_test * 100:.2f}%')
         print('-'*60)
 
         print('='*60)
