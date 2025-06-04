@@ -8,19 +8,17 @@ import torch
 from pytorch_lightning.lite import LightningLite
 from torch import Tensor
 from torch.optim import SGD
-from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss
-from torch.utils.data import ConcatDataset
-from torch.optim.lr_scheduler import ReduceLROnPlateau, StepLR
+from torch.nn import CrossEntropyLoss
 from tqdm import tqdm
 import torchvision.transforms as T
 import numpy as np
 
-from utils.classifiers.binary_models import BinaryTrainedResNet, BinaryResNet
+from utils.classifiers.binary_models import BinaryTrainedResNet
 from utils.datasets import BinaryDataset, SequenceDataset
 from utils.attacks import PGDL0, PGDL2, PGDLinf
 from utils.utils import freeze, set_seed
 from utils.gdpr_cfe import GDPR_CFE
-from utils.scfe import APG0_CFE, APG0_CFE_KDE
+from utils.scfe import APG0_CFE
 from utils.utils import ModelWithNormalization
 
 from wilds import get_dataset
@@ -52,7 +50,7 @@ class BinaryPGDLinf(PGDLinf):
         return calc_loss(outs, targets)
     
 
-def fine_tune(classifier, dataloader, train=False, save_model=True, seed=10) -> float: # type: ignore
+def fine_tune(classifier, dataloader, fname, method='Orig',save_model=True, seed=10) -> float: # type: ignore
     
     epochs = 113 
     optim = SGD(classifier.parameters(), 
@@ -83,7 +81,10 @@ def fine_tune(classifier, dataloader, train=False, save_model=True, seed=10) -> 
             print(f'Running loss: {running_loss / len(dataloader.dataset):.2f}')
         if epoch == epochs - 1:
             if save_model:
-                torch.save(classifier.state_dict(), f'../SCRATCH/CFE_models/waterbirds_clean_seed_{seed}_{UUID}.pt')
+                if method == 'Orig':
+                    torch.save(classifier.state_dict(), f'../SCRATCH/CFE_models/WaterBirds_trained_model_{seed}.pt')
+                else:
+                    torch.save(classifier.state_dict(), f'../SCRATCH/CFE_models/{fname}.pt')
             return loss.item()
 
 
@@ -126,9 +127,19 @@ def to_cpu(d: Dict[str, Any]) -> Dict[str, Any]:
 def generate_adv_labels(n: int, device: torch.device) -> Tensor:
     return torch.randint(0, 2, (n,), device=device)
 
+def get_percentage_pert_data(pert_data, percentage=20):
+    total_samples = int(len(pert_data) * percentage / 100)
+    idxs_array = [i for i in range(len(pert_data))]
+    random_samples_idxs = np.random.choice(idxs_array, size=total_samples, replace = False)
+
+    pert_data_subset = torch.utils.data.Subset(pert_data, random_samples_idxs)
+    return pert_data_subset
+
 class Main(LightningLite):
     def run(self,
         norm: Literal['GDPR_CFE', 'SCFE', 'L2', 'Linf'],
+        comb_nat_pert: Literal['yes', 'no'],
+        percentage: int,
         seed: int,
     ) -> None:
 
@@ -137,7 +148,9 @@ class Main(LightningLite):
         root = '/home/htc/kchitranshi/SCRATCH/CFE_datasets'
         os.makedirs(root, exist_ok=True)
 
-        fname = f'WaterBirds_{norm}_seed_{seed}'
+        comb_nat_pert = True if comb_nat_pert == 'yes' else False
+
+        fname = f'WaterBirds_{norm}_seed_{seed}_percentage_{percentage}' if comb_nat_pert else f'WaterBirds_{norm}_seed_{seed}'
         path = os.path.join(root, fname)
 
         if os.path.exists(path):
@@ -147,7 +160,7 @@ class Main(LightningLite):
             pathlib.Path(path).touch()
 
         # Fine tuning the model and setting the seed
-        fine_tune_model = True
+        fine_tune_model = False
         set_seed(seed)
 
         # Defining transformations
@@ -176,8 +189,9 @@ class Main(LightningLite):
         test_data = dataset.get_subset("test", transform=val_transform)
 
         # If fine tune model
+        train_data = BinaryDataset(train_data, which_dataset='waterbirds')
         if fine_tune_model:
-            train_data = BinaryDataset(train_data, which_dataset='waterbirds')
+            
             train_dataloader = torch.utils.data.DataLoader(train_data, 
                                                         batch_size=108, 
                                                         shuffle=True,
@@ -213,8 +227,7 @@ class Main(LightningLite):
             model.train()
         else:
             print(f"Loading Pre-trained Model.")
-            state_dict = torch.load("../SCRATCH/CFE_models/waterbirds_clean_cef6e3ae-5f70-40ce-af81-c78d0f4080d4.pt", map_location='cpu')
-            #035084af-b895-433b-bdf9-46cba06e8f51 a6676e20-4c61-45e6-97a0-54d9f9929c5a
+            state_dict = torch.load(f"../SCRATCH/CFE_models/WaterBirds_trained_model_seed_{seed}.pt", map_location='cpu')
         classifier = ModelWithNormalization(model,
                                             mean=[0.485, 0.456, 0.406], 
                                             std=[0.229, 0.224, 0.225]
@@ -224,7 +237,7 @@ class Main(LightningLite):
 
         # Fine Tuning the classifier
         classifier = self.setup(classifier)
-        loss = fine_tune(classifier, train_dataloader, save_model=True, seed=seed) if fine_tune_model else None
+        loss = fine_tune(classifier, train_dataloader, fname=fname, method='Orig', save_model=True, seed=seed) if fine_tune_model else None
         freeze(classifier)
         classifier.eval()
 
@@ -278,12 +291,15 @@ class Main(LightningLite):
         else:
             raise ValueError(norm)
 
-        del train_data 
         adv_dataset = {'imgs': [], 'labels': []}
 
         # Intialising the data to be attacked
         adv_attack_data = dataset.get_subset("train", transform=val_transform)
         adv_attack_data = BinaryDataset(adv_attack_data, which_dataset='waterbirds')
+
+        if comb_nat_pert:
+            adv_attack_data = get_percentage_pert_data(adv_attack_data, percentage=percentage)
+
         adv_attack_loader = torch.utils.data.DataLoader(adv_attack_data, 
                                                         batch_size=128, 
                                                         shuffle=False,
@@ -293,10 +309,10 @@ class Main(LightningLite):
 
         # Conducting the adversarial attacks/CFEs
         avg_L2_norms = []
-        for _, (data, _) in tqdm(enumerate(adv_attack_loader)):
+        for _, (data, orig_labels) in tqdm(enumerate(adv_attack_loader)):
 
             # Generating target labels            
-            labels = generate_adv_labels(data.shape[0], "cuda:0")
+            labels = generate_adv_labels(data.shape[0], "cuda:0") 
 
             if norm in ['L2','Linf']:
                 adv_data = atk(data, labels)
@@ -325,7 +341,7 @@ class Main(LightningLite):
                 del mins
             else:
                 adv_data = atk.get_perturbations(data, labels.unsqueeze(1))
-                
+
             avg_L2_norms.append((adv_data.cpu() - data).norm(p=2, dim=(1,2,3)).mean().item())
             adv_dataset['imgs'].append(adv_data.cpu())
             adv_dataset['labels'].append(labels.cpu())
@@ -335,7 +351,11 @@ class Main(LightningLite):
         adv_dataset['labels'] = torch.cat(adv_dataset['labels'])
 
         # Defining the dataloaders for the adversarial/CFE data
-        adv_data = SequenceDataset(adv_dataset['imgs'], adv_dataset['labels'],x_transform=None)#adv_train_transform)
+        adv_data = SequenceDataset(adv_dataset['imgs'], adv_dataset['labels'],x_transform=None)
+        
+        if comb_nat_pert:
+            adv_data = torch.utils.data.ConcatDataset([train_data, adv_data])
+
         adv_asr_check_data = SequenceDataset(adv_dataset['imgs'], adv_dataset['labels'],x_transform=None)
 
         adv_dataloader = torch.utils.data.DataLoader(adv_data, 
@@ -365,7 +385,7 @@ class Main(LightningLite):
                                             std=[0.229, 0.224, 0.225]
                     )
         adv_classifier = self.setup(adv_classifier)
-        adv_loss = fine_tune(adv_classifier, adv_dataloader, train=True, save_model=False)
+        adv_loss = fine_tune(adv_classifier, adv_dataloader, fname=fname, method=norm, save_model=True)
         freeze(adv_classifier)
         adv_classifier.eval()
 
@@ -408,6 +428,8 @@ class Main(LightningLite):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('norm', choices=('GDPR_CFE', 'SCFE', 'L2', 'Linf'))
+    parser.add_argument('comb_nat_pert', choices=['yes', 'no'])
+    parser.add_argument('percentage', type=int)
     parser.add_argument('seed', type=int)
     parser.add_argument('devices', nargs='+', type=int)
     args = parser.parse_args()
@@ -421,5 +443,7 @@ if __name__ == '__main__':
     
     Main(**lite_kwargs).run(
         args.norm,
+        args.comb_nat_pert,
+        args.percentage,
         args.seed,
     )

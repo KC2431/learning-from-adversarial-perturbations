@@ -48,7 +48,7 @@ class BinaryPGDLinf(PGDLinf):
         return calc_loss(outs, targets)
     
 
-def fine_tune(classifier, dataloader, train=False, save_model=True, seed=10) -> float: # type: ignore
+def fine_tune(classifier, dataloader, fname, method='Orig', save_model=True, seed=10) -> float: # type: ignore
     
     epochs = 60
     optim = SGD(classifier.parameters(), 
@@ -79,7 +79,10 @@ def fine_tune(classifier, dataloader, train=False, save_model=True, seed=10) -> 
             print(f'Running loss: {running_loss / len(dataloader.dataset):.2f}')
         if epoch == epochs - 1:
             if save_model:
-                torch.save(classifier.state_dict(), f'../SCRATCH/CFE_models/spuco_dogs_seed_{seed}_{UUID}.pt')
+                if method == 'Orig':
+                    torch.save(classifier.state_dict(), f'../SCRATCH/CFE_models/SpuCO_dogs_trained_model_seed_{seed}.pt')
+                else:
+                    torch.save(classifier.state_dict(), f'../SCRATCH/CFE_models/{fname}.pt')
             return loss.item()
 
 
@@ -98,7 +101,6 @@ def test(classifier, dataloader) -> Tensor:
         num_correct += (output.argmax(dim=1) == labels.cuda()).count_nonzero().item()
         num_big_dog += (output.argmax(dim=1) == labels.cuda()).logical_and(labels.cuda() == 0).count_nonzero().item()
         num_small_dog += (output.argmax(dim=1) == labels.cuda()).logical_and(labels.cuda() == 1).count_nonzero().item()
-        #print(f'num correct for batch {_} is {num_correct} and num_landbird is {num_landbird}, num_waterbird {num_waterbird}')
     return num_correct / num_samples
 
 @torch.no_grad()
@@ -123,9 +125,19 @@ def to_cpu(d: Dict[str, Any]) -> Dict[str, Any]:
 def generate_adv_labels(n: int, device: torch.device) -> Tensor:
     return torch.randint(0, 2, (n,), device=device)
 
+def get_percentage_pert_data(pert_data, percentage=20):
+    total_samples = int(len(pert_data) * percentage / 100)
+    idxs_array = [i for i in range(len(pert_data))]
+    random_samples_idxs = np.random.choice(idxs_array, size=total_samples, replace = False)
+
+    pert_data_subset = torch.utils.data.Subset(pert_data, random_samples_idxs)
+    return pert_data_subset
+
 class Main(LightningLite):
     def run(self,
         norm: Literal['GDPR_CFE', 'SCFE', 'L2', 'Linf'],
+        comb_nat_pert: Literal['yes', 'no'],
+        percentage: int,
         seed: int,
     ) -> None:
 
@@ -134,7 +146,9 @@ class Main(LightningLite):
         root = '/home/htc/kchitranshi/SCRATCH/CFE_datasets'
         os.makedirs(root, exist_ok=True)
 
-        fname = f'SpuCO_dogs_{norm}_seed_{seed}'
+        comb_nat_pert = True if comb_nat_pert == 'yes' else False
+
+        fname = f'SpuCO_dogs_{norm}_seed_{seed}_percentage_{percentage}' if comb_nat_pert else f'SpuCO_dogs_{norm}_seed_{seed}'
         path = os.path.join(root, fname)
 
         if os.path.exists(path):
@@ -144,7 +158,7 @@ class Main(LightningLite):
             pathlib.Path(path).touch()
 
         # Fine tuning the model and setting the seed
-        fine_tune_model = True
+        fine_tune_model = False
         set_seed(seed)
 
         # Defining transformations
@@ -171,9 +185,9 @@ class Main(LightningLite):
         val_data = SpuCoDogsDataset('../SCRATCH/spuco_dogs/val', transform=val_transform)
         test_data = SpuCoDogsDataset('../SCRATCH/spuco_dogs/test', transform=val_transform)
 
+        train_data = BinaryDataset(train_data, 'spuco_dogs')
         # If fine tune model
         if fine_tune_model:
-            train_data = BinaryDataset(train_data, 'spuco_dogs')
             train_dataloader = torch.utils.data.DataLoader(train_data, 
                                                         batch_size=108, 
                                                         shuffle=True,
@@ -209,8 +223,7 @@ class Main(LightningLite):
             model.train()
         else:
             print(f"Loading Pre-trained Model.")
-            state_dict = torch.load("../SCRATCH/CFE_models/spuco_dogs_30a9dd9e-2c9a-45c2-9de3-25cb48f38f9e.pt", map_location='cpu')
-            #035084af-b895-433b-bdf9-46cba06e8f51 a6676e20-4c61-45e6-97a0-54d9f9929c5a
+            state_dict = torch.load(f"../SCRATCH/CFE_models/SpuCO_dogs_trained_model_seed_{seed}.pt", map_location='cpu')
         classifier = ModelWithNormalization(model,
                                             mean=[0.485, 0.456, 0.406], 
                                             std=[0.229, 0.224, 0.225]
@@ -220,7 +233,7 @@ class Main(LightningLite):
 
         # Fine Tuning the classifier
         classifier = self.setup(classifier)
-        loss = fine_tune(classifier, train_dataloader, save_model=True, seed=seed) if fine_tune_model else None
+        loss = fine_tune(classifier, train_dataloader, fname=fname, method='Orig', save_model=True) if fine_tune_model else None
         freeze(classifier)
         classifier.eval()
 
@@ -274,12 +287,15 @@ class Main(LightningLite):
         else:
             raise ValueError(norm)
 
-        del train_data 
         adv_dataset = {'imgs': [], 'labels': []}
 
         # Intialising the data to be attacked
         adv_attack_data = SpuCoDogsDataset('../SCRATCH/spuco_dogs/train', transform=val_transform)
         adv_attack_data = BinaryDataset(adv_attack_data, 'spuco_dogs')
+
+        if comb_nat_pert:
+            adv_attack_data = get_percentage_pert_data(adv_attack_data, percentage=percentage)
+
         adv_attack_loader = torch.utils.data.DataLoader(adv_attack_data, 
                                                         batch_size=256, 
                                                         shuffle=False,
@@ -312,8 +328,9 @@ class Main(LightningLite):
                            iters=steps,
                            maxs=maxs,
                            mins=mins,
-                           lam_steps=5,
-                           L0=1e-5 # changed from 1e-3 to 1e-4
+                           lam0=5e-2,
+                           lam_steps=4,
+                           L0=1e-4 # changed from 1e-3 to 1e-4
                 )
                 adv_data = cfe_atk.get_CFs_natural_binary(data.cuda(), labels.unsqueeze(1).cuda())
 
@@ -332,8 +349,12 @@ class Main(LightningLite):
 
         # Defining the dataloaders for the adversarial/CFE data
         adv_data = SequenceDataset(adv_dataset['imgs'], adv_dataset['labels'],x_transform=None)
-        adv_asr_check_data = SequenceDataset(adv_dataset['imgs'], adv_dataset['labels'],x_transform=None)
+        
+        if comb_nat_pert:
+            adv_data = torch.utils.data.ConcatDataset([train_data, adv_data])
 
+        adv_asr_check_data = SequenceDataset(adv_dataset['imgs'], adv_dataset['labels'],x_transform=None)
+        
         adv_dataloader = torch.utils.data.DataLoader(adv_data, 
                                                         batch_size=108, 
                                                         shuffle=True,
@@ -361,7 +382,7 @@ class Main(LightningLite):
                                             std=[0.229, 0.224, 0.225]
                     )
         adv_classifier = self.setup(adv_classifier)
-        adv_loss = fine_tune(adv_classifier, adv_dataloader, train=True, save_model=False)
+        adv_loss = fine_tune(adv_classifier, adv_dataloader, fname=fname, method=norm, save_model=True)
         freeze(adv_classifier)
         adv_classifier.eval()
 
@@ -404,6 +425,8 @@ class Main(LightningLite):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('norm', choices=('GDPR_CFE', 'SCFE', 'L2', 'Linf'))
+    parser.add_argument('comb_nat_pert', choices=['yes', 'no'])
+    parser.add_argument('percentage', type=int)
     parser.add_argument('seed', type=int)
     parser.add_argument('devices', nargs='+', type=int)
     args = parser.parse_args()
@@ -417,5 +440,7 @@ if __name__ == '__main__':
     
     Main(**lite_kwargs).run(
         args.norm,
+        args.comb_nat_pert,
+        args.percentage,
         args.seed,
     )
