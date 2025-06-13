@@ -48,7 +48,7 @@ class BinaryPGDLinf(PGDLinf):
         return calc_loss(outs, targets)
     
 
-def fine_tune(classifier, dataloader, fname, method, train=False, save_model=True, seed=10, model_save_path='../SCRATCH/CFE_models') -> float: # type: ignore
+def fine_tune(classifier, dataloader, fname, method='Orig', train=False, save_model=True, seed=10, model_save_path='../SCRATCH/CFE_models') -> float: # type: ignore
     
     epochs = 10
     optim = SGD(classifier.parameters(), 
@@ -69,8 +69,8 @@ def fine_tune(classifier, dataloader, fname, method, train=False, save_model=Tru
             else: 
                 imgs, labels = output[0], output[1]
 
-            outs = classifier(imgs.cuda()) 
-            losses = calc_loss(outs, labels.long().cuda())
+            outs = classifier(imgs.to(classifier.device)) 
+            losses = calc_loss(outs, labels.long().to(classifier.device))
             loss = losses.mean()
 
             optim.zero_grad(True)
@@ -87,7 +87,10 @@ def fine_tune(classifier, dataloader, fname, method, train=False, save_model=Tru
             print(f'Running loss: {running_loss / len(dataloader.dataset):.2f}')
         if epoch == epochs - 1:
             if save_model:
-                torch.save(classifier.state_dict(), f'{model_save_path}/cheXpert_trained_model_seed_{seed}.pt')
+                if method == 'Orig':
+                    torch.save(classifier.state_dict(), f'{model_save_path}/cheXpert_trained_model_seed_{seed}.pt')
+                else:
+                    torch.save(classifier.state_dict(), f'{model_save_path}/{fname}.pt')
             return loss.item()
 
 
@@ -100,18 +103,18 @@ def test(classifier, dataloader) -> Tensor:
         assert len(labels.shape) == 1
         num_samples += len(labels)
 
-        output = classifier(imgs.cuda())
-        num_correct += (output.argmax(dim=1) == labels.view(-1).cuda()).count_nonzero().item()
+        output = classifier(imgs.to(classifier.device))
+        num_correct += (output.argmax(dim=1) == labels.view(-1).to(classifier.device)).count_nonzero().item()
     return num_correct / num_samples
 
 @torch.no_grad()
 def get_attack_succ_rate(classifier, dataloader):
     num_succ_attacks = 0
     for _, (adv_img, adv_labels) in enumerate(dataloader):
-        pred = classifier(adv_img.cuda())
+        pred = classifier(adv_img.to(classifier.device))
         assert len(pred.shape) == 2
         assert len(adv_labels.shape) == 1
-        num_succ_attacks += (pred.argmax(dim=1) == adv_labels.cuda()).count_nonzero().item()
+        num_succ_attacks += (pred.argmax(dim=1) == adv_labels.to(classifier.device)).count_nonzero().item()
 
     return num_succ_attacks / len(dataloader.dataset)
 
@@ -263,7 +266,7 @@ class Main(LightningLite):
                     lamb=1e-2,
                     lamb_cf=1e-2,
                     mode="natural_binary",
-                    device= 'cuda:0',
+                    device= classifier.device,
                 )
         elif norm == 'SCFE':
             atk = APG0_CFE
@@ -286,7 +289,7 @@ class Main(LightningLite):
         adv_dataset = {'imgs': [], 'labels': []}
 
         # Intialising the data to be attacked
-        adv_attack_data = CheXpertNoFinding(data_path='../SCRATCH',split='tr',hparams=None)
+        adv_attack_data = CheXpertNoFinding(data_path=f'{dataset_path}',split='tr',hparams=None)
         adv_attack_loader = torch.utils.data.DataLoader(adv_attack_data, 
                                                         batch_size=256, 
                                                         shuffle=False,
@@ -300,7 +303,7 @@ class Main(LightningLite):
         for _, (_, data, _, _) in tqdm(enumerate(adv_attack_loader)):
 
             # Generating target labels            
-            labels = generate_adv_labels(data.shape[0], "cuda:0")
+            labels = generate_adv_labels(data.shape[0], classifier.device)
 
             if norm in ['L2','Linf']:
                 adv_data = atk(data, labels)
@@ -323,7 +326,7 @@ class Main(LightningLite):
                            lam_steps=3,
                            L0=1e-5 # changed from 1e-4 to 1e-3
                 )
-                adv_data = cfe_atk.get_CFs_natural_binary(data.cuda(), labels.unsqueeze(1).cuda())
+                adv_data = cfe_atk.get_CFs_natural_binary(data.to(classifier.device), labels.unsqueeze(1).to(classifier.device))
 
                 del maxs
                 del mins

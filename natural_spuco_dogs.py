@@ -270,7 +270,7 @@ class Main(LightningLite):
                     lamb=1e-2,
                     lamb_cf=1e-2,
                     mode="natural_binary",
-                    device= 'cuda:0',
+                    device= classifier.device,
                 )
         elif norm == 'SCFE':
             atk = APG0_CFE
@@ -311,7 +311,7 @@ class Main(LightningLite):
         for _, (data, _) in tqdm(enumerate(adv_attack_loader)):
 
             # Generating target labels            
-            labels = generate_adv_labels(data.shape[0], "cuda:0")
+            labels = generate_adv_labels(data.shape[0], classifier.device)
 
             if norm in ['L2','Linf']:
                 adv_data = atk(data, labels)

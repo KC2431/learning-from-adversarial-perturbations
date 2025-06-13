@@ -50,7 +50,7 @@ class BinaryPGDLinf(PGDLinf):
         return calc_loss(outs, targets)
     
 
-def fine_tune(classifier, dataloader, train=False, save_model=True) -> float: # type: ignore
+def fine_tune(classifier, dataloader, fname, method='Orig', train=False, save_model=True, seed=10, model_save_path='../SCRATCH/CFE_models') -> float: # type: ignore
     
     epochs = 20
     optim = SGD(classifier.parameters(), 
@@ -65,9 +65,9 @@ def fine_tune(classifier, dataloader, train=False, save_model=True) -> float: # 
     for epoch in tqdm(range(epochs)):
         running_loss = 0
         for _, (imgs, labels) in enumerate(dataloader):
-            outs = classifier(imgs.cuda())
+            outs = classifier(imgs.to(classifier.device))
             labels = labels[:,9] if not train else labels 
-            losses = calc_loss(outs, labels.cuda())
+            losses = calc_loss(outs, labels.to(classifier.device))
             loss = losses.mean()
 
             optim.zero_grad(True)
@@ -82,7 +82,10 @@ def fine_tune(classifier, dataloader, train=False, save_model=True) -> float: # 
             print(f'Running loss: {running_loss / len(dataloader.dataset):.2f}')
         if epoch == epochs - 1:
             if save_model:
-                torch.save(classifier.state_dict(), f'../SCRATCH/CFE_models/celebA_{UUID}.pt')
+                if method == 'Orig':
+                    torch.save(classifier.state_dict(), f'{model_save_path}/celebA_trained_model_seed_{seed}.pt')
+                else:
+                    torch.save(classifier.state_dict(), f'{model_save_path}/{fname}.pt')
             return loss.item()
 
 
@@ -96,18 +99,18 @@ def test(classifier, dataloader) -> Tensor:
         assert len(labels.shape) == 1
         num_samples += len(labels)
 
-        output = classifier(imgs.cuda())
-        num_correct += (output.argmax(dim=1) == labels.cuda()).count_nonzero().item()
+        output = classifier(imgs.to(classifier.device))
+        num_correct += (output.argmax(dim=1) == labels.to(classifier.device)).count_nonzero().item()
     return num_correct / num_samples
 
 @torch.no_grad()
 def get_attack_succ_rate(classifier, dataloader):
     num_succ_attacks = 0
     for _, (adv_img, adv_labels) in enumerate(dataloader):
-        pred = classifier(adv_img.cuda())
+        pred = classifier(adv_img.to(classifier.device))
         assert len(pred.shape) == 2
         assert len(adv_labels.shape) == 1
-        num_succ_attacks += (pred.argmax(dim=1) == adv_labels.cuda()).count_nonzero().item()
+        num_succ_attacks += (pred.argmax(dim=1) == adv_labels.to(classifier.device)).count_nonzero().item()
 
     return num_succ_attacks / len(dataloader.dataset)
 
@@ -129,6 +132,9 @@ class Main(LightningLite):
     ) -> None:
 
         print(f'UUID: {UUID}')
+
+        models_path = '../SCRATCH/CFE_models'
+        dataset_path = '../SCRATCH'
 
         root = '/home/htc/kchitranshi/SCRATCH/CFE_datasets'
         os.makedirs(root, exist_ok=True)
@@ -165,10 +171,10 @@ class Main(LightningLite):
         ])
 
         # Loading the datasets
-        train_data = CelebA(root='../SCRATCH', split='train', transform=train_transform)
-        train_test_data = CelebA(root='../SCRATCH', split='train', transform=val_transform)
-        val_data = CelebA(root='../SCRATCH', split='valid', transform=val_transform)
-        test_data = CelebA(root='../SCRATCH', split='test', transform=val_transform)
+        train_data = CelebA(root=f'{dataset_path}', split='train', transform=train_transform)
+        train_test_data = CelebA(root=f'{dataset_path}', split='train', transform=val_transform)
+        val_data = CelebA(root=f'{dataset_path}', split='valid', transform=val_transform)
+        test_data = CelebA(root=f'{dataset_path}', split='test', transform=val_transform)
 
         # If fine tune model
         if fine_tune_model:
@@ -204,7 +210,7 @@ class Main(LightningLite):
             model.train()
         else:
             print(f"Loading Pre-trained Model.")
-            state_dict = torch.load("../SCRATCH/CFE_models/celebA_trained_model.pt", map_location='cpu')
+            state_dict = torch.load(f"{models_path}/celebA_trained_model_seed_{seed}.pt", map_location='cpu')
             #035084af-b895-433b-bdf9-46cba06e8f51 a6676e20-4c61-45e6-97a0-54d9f9929c5a
         classifier = ModelWithNormalization(model,
                                             mean=[0.485, 0.456, 0.406], 
@@ -215,7 +221,7 @@ class Main(LightningLite):
 
         # Fine Tuning the classifier
         classifier = self.setup(classifier)
-        loss = fine_tune(classifier, train_dataloader, save_model=True) if fine_tune_model else None
+        loss = fine_tune(classifier, train_dataloader, fname=fname, method='Orig', save_model=True, model_save_path=models_path) if fine_tune_model else None
         freeze(classifier)
         classifier.eval()
 
@@ -311,7 +317,7 @@ class Main(LightningLite):
                            lam_steps=4,
                            L0=1e-3 # changed from 1e-4 to 1e-3
                 )
-                adv_data = cfe_atk.get_CFs_natural_binary(data.cuda(), labels.unsqueeze(1).cuda())
+                adv_data = cfe_atk.get_CFs_natural_binary(data.to(classifier.device), labels.unsqueeze(1).to(classifier.device))
 
                 del maxs
                 del mins
@@ -358,7 +364,7 @@ class Main(LightningLite):
                                             std=[0.229, 0.224, 0.225]
                     )
         adv_classifier = self.setup(adv_classifier)
-        adv_loss = fine_tune(adv_classifier, adv_dataloader, train=True, save_model=False)
+        adv_loss = fine_tune(classifier, train_dataloader, fname=fname, method=norm, save_model=True, model_save_path=models_path)
         freeze(adv_classifier)
         adv_classifier.eval()
 
