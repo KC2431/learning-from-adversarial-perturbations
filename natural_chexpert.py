@@ -48,7 +48,7 @@ class BinaryPGDLinf(PGDLinf):
         return calc_loss(outs, targets)
     
 
-def fine_tune(classifier, dataloader, train=False, save_model=True, seed=10) -> float: # type: ignore
+def fine_tune(classifier, dataloader, fname, method, train=False, save_model=True, seed=10, model_save_path='../SCRATCH/CFE_models') -> float: # type: ignore
     
     epochs = 10
     optim = SGD(classifier.parameters(), 
@@ -87,7 +87,7 @@ def fine_tune(classifier, dataloader, train=False, save_model=True, seed=10) -> 
             print(f'Running loss: {running_loss / len(dataloader.dataset):.2f}')
         if epoch == epochs - 1:
             if save_model:
-                torch.save(classifier.state_dict(), f'../SCRATCH/CFE_models/CheXpert_trained_model_seed_{seed}_{UUID}.pt')
+                torch.save(classifier.state_dict(), f'{model_save_path}/cheXpert_trained_model_seed_{seed}.pt')
             return loss.item()
 
 
@@ -126,9 +126,6 @@ def to_cpu(d: Dict[str, Any]) -> Dict[str, Any]:
 def generate_adv_labels(n: int, device: torch.device) -> Tensor:
     return torch.randint(0, 2, (n,), device=device)
 
-
-
-
 class Main(LightningLite):
     def run(self,
         norm: Literal['GDPR_CFE', 'SCFE', 'L2', 'Linf'],
@@ -137,10 +134,13 @@ class Main(LightningLite):
 
         print(f'UUID: {UUID}')
 
+        models_path = '../SCRATCH/CFE_models'
+        dataset_path = '../SCRATCH'
+
         root = '/home/htc/kchitranshi/SCRATCH/CFE_datasets'
         os.makedirs(root, exist_ok=True)
 
-        fname = f'cheXpert_{norm}_{seed}'
+        fname = f'cheXpert_{norm}_seed_{seed}'
         path = os.path.join(root, fname)
 
         if os.path.exists(path):
@@ -172,10 +172,10 @@ class Main(LightningLite):
         ])
 
         # Loading the datasets
-        train_data = CheXpertNoFinding(data_path='../SCRATCH',split='tr',hparams=None)
-        val_data = CheXpertNoFinding(data_path='../SCRATCH',split='va',hparams=None)
-        test_data = CheXpertNoFinding(data_path='../SCRATCH',split='te',hparams=None)
-        train_test_data = CheXpertNoFinding(data_path='../SCRATCH',split='tr',hparams=None)
+        train_data = CheXpertNoFinding(data_path=f'{dataset_path}',split='tr',hparams=None)
+        val_data = CheXpertNoFinding(data_path=f'{dataset_path}',split='va',hparams=None)
+        test_data = CheXpertNoFinding(data_path=f'{dataset_path}',split='te',hparams=None)
+        train_test_data = CheXpertNoFinding(data_path=f'{dataset_path}',split='tr',hparams=None)
 
         # If fine tune model
         if fine_tune_model:
@@ -212,7 +212,7 @@ class Main(LightningLite):
             model.train()
         else:
             print(f"Loading Pre-trained Model.")
-            state_dict = torch.load("../SCRATCH/CFE_models/cheXpert_trained_model_seed_{seed}_6f785704-b665-4f33-9702-6d55d206a965.pt", map_location='cpu')
+            state_dict = torch.load(f"{models_path}/cheXpert_trained_model_seed_{seed}.pt", map_location='cpu')
         classifier = ModelWithNormalization(model,
                                             mean=[0.485, 0.456, 0.406], 
                                             std=[0.229, 0.224, 0.225]
@@ -222,7 +222,13 @@ class Main(LightningLite):
 
         # Fine Tuning the classifier
         classifier = self.setup(classifier)
-        loss = fine_tune(classifier, train_dataloader, save_model=True, seed=seed) if fine_tune_model else None
+        loss = fine_tune(classifier, 
+                         train_dataloader, 
+                         fname=fname, 
+                         method='Orig', 
+                         save_model=True, 
+                         seed=seed, 
+                         model_save_path=models_path) if fine_tune_model else None
         freeze(classifier)
         classifier.eval()
 
@@ -366,7 +372,12 @@ class Main(LightningLite):
                                             std=[0.229, 0.224, 0.225]
                     )
         adv_classifier = self.setup(adv_classifier)
-        adv_loss = fine_tune(adv_classifier, adv_dataloader, train=True, save_model=False, seed=seed)
+        adv_loss = fine_tune(adv_classifier, 
+                             adv_dataloader, 
+                             fname=fname, 
+                             method=norm, 
+                             save_model=True, 
+                             model_save_path=models_path)
         freeze(adv_classifier)
         adv_classifier.eval()
 
