@@ -10,7 +10,7 @@ devices=${@}
 
 datasets=(CIFAR10)
 modes=(natural_rand natural_det)
-norms=(L2 Linf)
+norms=(SCFE)
 
 for dataset in "${datasets[@]}"; do
 for mode in "${modes[@]}"; do

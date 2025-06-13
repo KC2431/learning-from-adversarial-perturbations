@@ -133,7 +133,7 @@ class Main(LightningLite):
         root = '/home/htc/kchitranshi/SCRATCH/CFE_datasets'
         os.makedirs(root, exist_ok=True)
 
-        fname = f'celebA_{norm}'
+        fname = f'celebA_{norm}_seed_{seed}'
         path = os.path.join(root, fname)
 
         if os.path.exists(path):
@@ -204,7 +204,7 @@ class Main(LightningLite):
             model.train()
         else:
             print(f"Loading Pre-trained Model.")
-            state_dict = torch.load("../SCRATCH/CFE_models/celebA_aabdafe8-d805-4f62-9d76-5a50f95efbe3.pt", map_location='cpu')
+            state_dict = torch.load("../SCRATCH/CFE_models/celebA_trained_model.pt", map_location='cpu')
             #035084af-b895-433b-bdf9-46cba06e8f51 a6676e20-4c61-45e6-97a0-54d9f9929c5a
         classifier = ModelWithNormalization(model,
                                             mean=[0.485, 0.456, 0.406], 
@@ -307,8 +307,9 @@ class Main(LightningLite):
                            iters=steps,
                            maxs=maxs,
                            mins=mins,
-                           lam_steps=2,
-                           L0=1e-5 # changed from 1e-4 to 1e-3
+                           lam0=1e-2,
+                           lam_steps=4,
+                           L0=1e-3 # changed from 1e-4 to 1e-3
                 )
                 adv_data = cfe_atk.get_CFs_natural_binary(data.cuda(), labels.unsqueeze(1).cuda())
 

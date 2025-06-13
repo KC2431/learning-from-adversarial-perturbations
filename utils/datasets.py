@@ -245,7 +245,7 @@ class BinaryDataset(Dataset):
         if self.which_dataset == 'imagenette':
             new_label = -1 if label == 1 else 1  # Change label
         elif self.which_dataset in ['waterbirds', 'spuco_dogs']:
-            new_label = label
+            new_label = torch.tensor(label) if self.which_dataset == 'spuco_dogs' else label
         else:
             return NotImplementedError
         return img, new_label  # Return modified sample

@@ -6,6 +6,7 @@ from typing import Any, Dict, Literal
 import torch
 from pytorch_lightning.lite import LightningLite
 from torch import Tensor
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.optim import SGD
 from torch.nn import CrossEntropyLoss
 from tqdm import tqdm
@@ -47,9 +48,9 @@ class BinaryPGDLinf(PGDLinf):
         return calc_loss(outs, targets)
     
 
-def fine_tune(classifier, dataloader, train=False, save_model=True) -> float: # type: ignore
+def fine_tune(classifier, dataloader, train=False, save_model=True, seed=10) -> float: # type: ignore
     
-    epochs = 13
+    epochs = 10
     optim = SGD(classifier.parameters(), 
                 lr=1e-3,
                 momentum=0.9,
@@ -57,7 +58,7 @@ def fine_tune(classifier, dataloader, train=False, save_model=True) -> float: # 
                 nesterov=False
             ) 
     
-    #scheduler = ReduceLROnPlateau(optim, factor=0.1,threshold=1e-7, verbose=True)
+    scheduler = ReduceLROnPlateau(optim, factor=0.1, threshold=1e-7, verbose=True)
     classifier.train()
 
     for epoch in tqdm(range(epochs)):
@@ -69,7 +70,7 @@ def fine_tune(classifier, dataloader, train=False, save_model=True) -> float: # 
                 imgs, labels = output[0], output[1]
 
             outs = classifier(imgs.cuda()) 
-            losses = calc_loss(outs, labels.long().cuda()) if not train else calc_loss(outs, labels.cuda())
+            losses = calc_loss(outs, labels.long().cuda())
             loss = losses.mean()
 
             optim.zero_grad(True)
@@ -80,13 +81,13 @@ def fine_tune(classifier, dataloader, train=False, save_model=True) -> float: # 
             optim.step()
             running_loss += loss.item() * imgs.size(0)
 
-        #scheduler.step(running_loss/ len(dataloader.dataset))
+        scheduler.step(running_loss/ len(dataloader.dataset))
         
         if epoch % 20 == 0:
             print(f'Running loss: {running_loss / len(dataloader.dataset):.2f}')
         if epoch == epochs - 1:
             if save_model:
-                torch.save(classifier.state_dict(), f'../SCRATCH/CFE_models/CheXpert_{UUID}.pt')
+                torch.save(classifier.state_dict(), f'../SCRATCH/CFE_models/CheXpert_trained_model_seed_{seed}_{UUID}.pt')
             return loss.item()
 
 
@@ -125,6 +126,9 @@ def to_cpu(d: Dict[str, Any]) -> Dict[str, Any]:
 def generate_adv_labels(n: int, device: torch.device) -> Tensor:
     return torch.randint(0, 2, (n,), device=device)
 
+
+
+
 class Main(LightningLite):
     def run(self,
         norm: Literal['GDPR_CFE', 'SCFE', 'L2', 'Linf'],
@@ -136,7 +140,7 @@ class Main(LightningLite):
         root = '/home/htc/kchitranshi/SCRATCH/CFE_datasets'
         os.makedirs(root, exist_ok=True)
 
-        fname = f'cheXpert_{norm}'
+        fname = f'cheXpert_{norm}_{seed}'
         path = os.path.join(root, fname)
 
         if os.path.exists(path):
@@ -146,7 +150,7 @@ class Main(LightningLite):
             pathlib.Path(path).touch()
 
         # Fine tuning the model and setting the seed
-        fine_tune_model = False
+        fine_tune_model = True
         set_seed(seed)
 
         # Defining transformations
@@ -208,7 +212,7 @@ class Main(LightningLite):
             model.train()
         else:
             print(f"Loading Pre-trained Model.")
-            state_dict = torch.load("../SCRATCH/CFE_models/CheXpert_6f785704-b665-4f33-9702-6d55d206a965.pt", map_location='cpu')
+            state_dict = torch.load("../SCRATCH/CFE_models/cheXpert_trained_model_seed_{seed}_6f785704-b665-4f33-9702-6d55d206a965.pt", map_location='cpu')
         classifier = ModelWithNormalization(model,
                                             mean=[0.485, 0.456, 0.406], 
                                             std=[0.229, 0.224, 0.225]
@@ -218,7 +222,7 @@ class Main(LightningLite):
 
         # Fine Tuning the classifier
         classifier = self.setup(classifier)
-        loss = fine_tune(classifier, train_dataloader, save_model=True) if fine_tune_model else None
+        loss = fine_tune(classifier, train_dataloader, save_model=True, seed=seed) if fine_tune_model else None
         freeze(classifier)
         classifier.eval()
 
@@ -362,7 +366,7 @@ class Main(LightningLite):
                                             std=[0.229, 0.224, 0.225]
                     )
         adv_classifier = self.setup(adv_classifier)
-        adv_loss = fine_tune(adv_classifier, adv_dataloader, train=True, save_model=False)
+        adv_loss = fine_tune(adv_classifier, adv_dataloader, train=True, save_model=False, seed=seed)
         freeze(adv_classifier)
         adv_classifier.eval()
 

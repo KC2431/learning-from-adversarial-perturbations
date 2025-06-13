@@ -50,7 +50,7 @@ class BinaryPGDLinf(PGDLinf):
         return calc_loss(outs, targets)
     
 
-def fine_tune(classifier, dataloader, fname, method='Orig',save_model=True, seed=10) -> float: # type: ignore
+def fine_tune(classifier, dataloader, fname, method='Orig',save_model=True, seed=10, model_save_dir='../SCRATCH/CFE_models') -> float: # type: ignore
     
     epochs = 113 
     optim = SGD(classifier.parameters(), 
@@ -65,8 +65,8 @@ def fine_tune(classifier, dataloader, fname, method='Orig',save_model=True, seed
     for epoch in tqdm(range(epochs)):
         running_loss = 0
         for _, (imgs, labels) in enumerate(dataloader):
-            outs = classifier(imgs.cuda())
-            losses = calc_loss(outs, labels.cuda())
+            outs = classifier(imgs.to(classifier.device))
+            losses = calc_loss(outs, labels.to(classifier.device))
             loss = losses.mean()
 
             optim.zero_grad(True)
@@ -82,9 +82,9 @@ def fine_tune(classifier, dataloader, fname, method='Orig',save_model=True, seed
         if epoch == epochs - 1:
             if save_model:
                 if method == 'Orig':
-                    torch.save(classifier.state_dict(), f'../SCRATCH/CFE_models/WaterBirds_trained_model_{seed}.pt')
+                    torch.save(classifier.state_dict(), f'{model_save_dir}/WaterBirds_trained_model_{seed}.pt')
                 else:
-                    torch.save(classifier.state_dict(), f'../SCRATCH/CFE_models/{fname}.pt')
+                    torch.save(classifier.state_dict(), f'{model_save_dir}/{fname}.pt')
             return loss.item()
 
 
@@ -99,10 +99,10 @@ def test(classifier, dataloader) -> Tensor:
         assert len(labels.shape) == 1
         num_samples += len(labels)
 
-        output = classifier(imgs.cuda())
-        num_correct += (output.argmax(dim=1) == labels.cuda()).count_nonzero().item()
-        num_landbird += (output.argmax(dim=1) == labels.cuda()).logical_and(labels.cuda() == 0).count_nonzero().item()
-        num_waterbird += (output.argmax(dim=1) == labels.cuda()).logical_and(labels.cuda() == 1).count_nonzero().item()
+        output = classifier(imgs.to(classifier.device))
+        num_correct += (output.argmax(dim=1) == labels.to(classifier.device)).count_nonzero().item()
+        num_landbird += (output.argmax(dim=1) == labels.to(classifier.device)).logical_and(labels.to(classifier.device) == 0).count_nonzero().item()
+        num_waterbird += (output.argmax(dim=1) == labels.to(classifier.device)).logical_and(labels.to(classifier.device) == 1).count_nonzero().item()
         #print(f'num correct for batch {_} is {num_correct} and num_landbird is {num_landbird}, num_waterbird {num_waterbird}')
     return num_correct / num_samples
 
@@ -110,9 +110,9 @@ def test(classifier, dataloader) -> Tensor:
 def get_attack_succ_rate(classifier, dataloader):
     num_succ_attacks = 0
     for _, (adv_img, adv_labels) in enumerate(dataloader):
-        pred = classifier(adv_img.cuda())
+        pred = classifier(adv_img.to(classifier.device))
         assert len(pred.shape) == 2
-        num_succ_attacks += (pred.argmax(dim=1) == adv_labels.cuda()).count_nonzero().item()
+        num_succ_attacks += (pred.argmax(dim=1) == adv_labels.to(classifier.device)).count_nonzero().item()
 
     return num_succ_attacks / len(dataloader.dataset)
 
@@ -144,6 +144,9 @@ class Main(LightningLite):
     ) -> None:
 
         print(f'UUID: {UUID}')
+
+        data_dir = '../SCRATCH/'
+        model_save_dir = '../SCRATCH/CFE_models'
 
         root = '/home/htc/kchitranshi/SCRATCH/CFE_datasets'
         os.makedirs(root, exist_ok=True)
@@ -182,7 +185,7 @@ class Main(LightningLite):
         ])
 
         # Loading the datasets
-        dataset = get_dataset(dataset="waterbirds", download=False,root_dir='../SCRATCH/')
+        dataset = get_dataset(dataset="waterbirds", download=False,root_dir=data_dir)
         train_data = dataset.get_subset("train", transform=train_transform)
         train_test_data = dataset.get_subset("train", transform=val_transform)
         val_data = dataset.get_subset("val", transform=val_transform)
@@ -227,7 +230,7 @@ class Main(LightningLite):
             model.train()
         else:
             print(f"Loading Pre-trained Model.")
-            state_dict = torch.load(f"../SCRATCH/CFE_models/WaterBirds_trained_model_seed_{seed}.pt", map_location='cpu')
+            state_dict = torch.load(f"{model_save_dir}/WaterBirds_trained_model_seed_{seed}.pt", map_location='cpu')
         classifier = ModelWithNormalization(model,
                                             mean=[0.485, 0.456, 0.406], 
                                             std=[0.229, 0.224, 0.225]
@@ -237,7 +240,7 @@ class Main(LightningLite):
 
         # Fine Tuning the classifier
         classifier = self.setup(classifier)
-        loss = fine_tune(classifier, train_dataloader, fname=fname, method='Orig', save_model=True, seed=seed) if fine_tune_model else None
+        loss = fine_tune(classifier, train_dataloader, fname=fname, method='Orig', save_model=True, seed=seed, model_save_dir=model_save_dir) if fine_tune_model else None
         freeze(classifier)
         classifier.eval()
 
@@ -335,7 +338,7 @@ class Main(LightningLite):
                            lam_steps=4,
                            L0=1e-3
                 )
-                adv_data = cfe_atk.get_CFs_natural_binary(data.cuda(), labels.unsqueeze(1).cuda())
+                adv_data = cfe_atk.get_CFs_natural_binary(data.to(classifier.device), labels.unsqueeze(1).to(classifier.device))
 
                 del maxs
                 del mins
@@ -385,7 +388,12 @@ class Main(LightningLite):
                                             std=[0.229, 0.224, 0.225]
                     )
         adv_classifier = self.setup(adv_classifier)
-        adv_loss = fine_tune(adv_classifier, adv_dataloader, fname=fname, method=norm, save_model=True)
+        adv_loss = fine_tune(adv_classifier, 
+                             adv_dataloader, 
+                             fname=fname, 
+                             method=norm, 
+                             save_model=True, 
+                             model_save_dir=model_save_dir)
         freeze(adv_classifier)
         adv_classifier.eval()
 

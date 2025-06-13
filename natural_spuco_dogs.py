@@ -48,7 +48,7 @@ class BinaryPGDLinf(PGDLinf):
         return calc_loss(outs, targets)
     
 
-def fine_tune(classifier, dataloader, fname, method='Orig', save_model=True, seed=10) -> float: # type: ignore
+def fine_tune(classifier, dataloader, fname, method='Orig', save_model=True, seed=10, model_save_dir='../SCRATCH/CFE_models') -> float: # type: ignore
     
     epochs = 60
     optim = SGD(classifier.parameters(), 
@@ -63,8 +63,8 @@ def fine_tune(classifier, dataloader, fname, method='Orig', save_model=True, see
     for epoch in tqdm(range(epochs)):
         running_loss = 0
         for _, (imgs, labels) in enumerate(dataloader):
-            outs = classifier(imgs.cuda())
-            losses = calc_loss(outs, labels.cuda())
+            outs = classifier(imgs.to(classifier.device))
+            losses = calc_loss(outs, labels.to(classifier.device))
             loss = losses.mean()
 
             optim.zero_grad(True)
@@ -80,9 +80,9 @@ def fine_tune(classifier, dataloader, fname, method='Orig', save_model=True, see
         if epoch == epochs - 1:
             if save_model:
                 if method == 'Orig':
-                    torch.save(classifier.state_dict(), f'../SCRATCH/CFE_models/SpuCO_dogs_trained_model_seed_{seed}.pt')
+                    torch.save(classifier.state_dict(), f'{model_save_dir}/SpuCO_dogs_trained_model_seed_{seed}.pt')
                 else:
-                    torch.save(classifier.state_dict(), f'../SCRATCH/CFE_models/{fname}.pt')
+                    torch.save(classifier.state_dict(), f'{model_save_dir}/{fname}.pt')
             return loss.item()
 
 
@@ -97,20 +97,20 @@ def test(classifier, dataloader) -> Tensor:
         assert len(labels.shape) == 1
         num_samples += len(labels)
 
-        output = classifier(imgs.cuda())
-        num_correct += (output.argmax(dim=1) == labels.cuda()).count_nonzero().item()
-        num_big_dog += (output.argmax(dim=1) == labels.cuda()).logical_and(labels.cuda() == 0).count_nonzero().item()
-        num_small_dog += (output.argmax(dim=1) == labels.cuda()).logical_and(labels.cuda() == 1).count_nonzero().item()
+        output = classifier(imgs.to(classifier.device))
+        num_correct += (output.argmax(dim=1) == labels.to(classifier.device)).count_nonzero().item()
+        num_big_dog += (output.argmax(dim=1) == labels.to(classifier.device)).logical_and(labels.to(classifier.device) == 0).count_nonzero().item()
+        num_small_dog += (output.argmax(dim=1) == labels.to(classifier.device)).logical_and(labels.to(classifier.device) == 1).count_nonzero().item()
     return num_correct / num_samples
 
 @torch.no_grad()
 def get_attack_succ_rate(classifier, dataloader):
     num_succ_attacks = 0
     for _, (adv_img, adv_labels) in enumerate(dataloader):
-        pred = classifier(adv_img.cuda())
+        pred = classifier(adv_img.to(classifier.device))
         assert len(pred.shape) == 2
         assert len(adv_labels.shape) == 1
-        num_succ_attacks += (pred.argmax(dim=1) == adv_labels.cuda()).count_nonzero().item()
+        num_succ_attacks += (pred.argmax(dim=1) == adv_labels.to(classifier.device)).count_nonzero().item()
 
     return num_succ_attacks / len(dataloader.dataset)
 
@@ -143,6 +143,8 @@ class Main(LightningLite):
 
         print(f'UUID: {UUID}')
 
+        data_dir = '../SCRATCH'
+        model_save_dir = '../SCRATCH/CFE_models'
         root = '/home/htc/kchitranshi/SCRATCH/CFE_datasets'
         os.makedirs(root, exist_ok=True)
 
@@ -180,10 +182,10 @@ class Main(LightningLite):
         ])
 
         # Loading the datasets
-        train_data = SpuCoDogsDataset('../SCRATCH/spuco_dogs/train', transform=train_transform)
-        train_test_data = SpuCoDogsDataset('../SCRATCH/spuco_dogs/train', transform=val_transform)
-        val_data = SpuCoDogsDataset('../SCRATCH/spuco_dogs/val', transform=val_transform)
-        test_data = SpuCoDogsDataset('../SCRATCH/spuco_dogs/test', transform=val_transform)
+        train_data = SpuCoDogsDataset(f'{data_dir}/spuco_dogs/train', transform=train_transform)
+        train_test_data = SpuCoDogsDataset(f'{data_dir}/spuco_dogs/train', transform=val_transform)
+        val_data = SpuCoDogsDataset(f'{data_dir}/spuco_dogs/val', transform=val_transform)
+        test_data = SpuCoDogsDataset(f'{data_dir}/spuco_dogs/test', transform=val_transform)
 
         train_data = BinaryDataset(train_data, 'spuco_dogs')
         # If fine tune model
@@ -223,7 +225,7 @@ class Main(LightningLite):
             model.train()
         else:
             print(f"Loading Pre-trained Model.")
-            state_dict = torch.load(f"../SCRATCH/CFE_models/SpuCO_dogs_trained_model_seed_{seed}.pt", map_location='cpu')
+            state_dict = torch.load(f"{model_save_dir}/SpuCO_dogs_trained_model_seed_{seed}.pt", map_location='cpu')
         classifier = ModelWithNormalization(model,
                                             mean=[0.485, 0.456, 0.406], 
                                             std=[0.229, 0.224, 0.225]
@@ -233,7 +235,7 @@ class Main(LightningLite):
 
         # Fine Tuning the classifier
         classifier = self.setup(classifier)
-        loss = fine_tune(classifier, train_dataloader, fname=fname, method='Orig', save_model=True) if fine_tune_model else None
+        loss = fine_tune(classifier, train_dataloader, fname=fname, method='Orig', save_model=True, model_save_dir=model_save_dir) if fine_tune_model else None
         freeze(classifier)
         classifier.eval()
 
@@ -290,7 +292,7 @@ class Main(LightningLite):
         adv_dataset = {'imgs': [], 'labels': []}
 
         # Intialising the data to be attacked
-        adv_attack_data = SpuCoDogsDataset('../SCRATCH/spuco_dogs/train', transform=val_transform)
+        adv_attack_data = SpuCoDogsDataset(f'{data_dir}/spuco_dogs/train', transform=val_transform)
         adv_attack_data = BinaryDataset(adv_attack_data, 'spuco_dogs')
 
         if comb_nat_pert:
@@ -305,6 +307,7 @@ class Main(LightningLite):
 
         # Conducting the adversarial attacks/CFEs
         avg_L2_norms = []
+        avg_L0_norms = []
         for _, (data, _) in tqdm(enumerate(adv_attack_loader)):
 
             # Generating target labels            
@@ -330,16 +333,19 @@ class Main(LightningLite):
                            mins=mins,
                            lam0=5e-2,
                            lam_steps=4,
-                           L0=1e-4 # changed from 1e-3 to 1e-4
+                           L0=1e-4, # changed from 1e-3 to 1e-4
+                           beta=5e-3 # Less beta for less sparsity
                 )
-                adv_data = cfe_atk.get_CFs_natural_binary(data.cuda(), labels.unsqueeze(1).cuda())
+                adv_data = cfe_atk.get_CFs_natural_binary(data.to(classifier.device), labels.unsqueeze(1).to(classifier.device))
 
                 del maxs
                 del mins
             else:
                 adv_data = atk.get_perturbations(data, labels.unsqueeze(1))
                 
+            
             avg_L2_norms.append((adv_data.cpu() - data).norm(p=2, dim=(1,2,3)).mean().item())
+            avg_L0_norms.append(torch.logical_not(torch.isclose(adv_data.cpu(), data)).float().sum(dim=(1,2,3)).mean().item())
             adv_dataset['imgs'].append(adv_data.cpu())
             adv_dataset['labels'].append(labels.cpu())
         
@@ -371,7 +377,7 @@ class Main(LightningLite):
         # Checking the Attack Success Rate for Adversarial attacks/CFEs
         print('-'*60)
         attack_succ_rate = get_attack_succ_rate(classifier=classifier, dataloader=adv_asr_check_dataloader)
-        print(f'The attack success rate is {attack_succ_rate * 100:.2f} with an avg L2 norm of {np.mean(avg_L2_norms).item():.2f}')
+        print(f'The attack success rate is {attack_succ_rate * 100:.2f} with an avg L2 norm of {np.mean(avg_L2_norms).item():.2f} and avg L0 norm of {np.mean(avg_L0_norms).item():.2f}')
         print('-'*60)
 
         # Intialising the Adversarial model
@@ -382,7 +388,7 @@ class Main(LightningLite):
                                             std=[0.229, 0.224, 0.225]
                     )
         adv_classifier = self.setup(adv_classifier)
-        adv_loss = fine_tune(adv_classifier, adv_dataloader, fname=fname, method=norm, save_model=True)
+        adv_loss = fine_tune(adv_classifier, adv_dataloader, fname=fname, method=norm, save_model=True, model_save_dir=model_save_dir)
         freeze(adv_classifier)
         adv_classifier.eval()
 

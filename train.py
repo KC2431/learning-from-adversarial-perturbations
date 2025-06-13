@@ -143,8 +143,13 @@ def train(dataset_name: str, devices: List[int]) -> None:
                         'MNIST_natural_rand_Linf', 'MNIST_natural_det_Linf', 
                         'FMNIST_natural_rand_L2', 'FMNIST_natural_det_L2', 
                         'FMNIST_natural_rand_Linf', 'FMNIST_natural_det_Linf',
-                        'CIFAR10_natural_rand_Linf'):
+                        'CIFAR10_natural_rand_Linf','CIFAR10_natural_rand_SCFE',
+                        'CIFAR10_natural_det_SCFE','CIFAR10_natural_rand_GDPR_CFE',
+                        'CIFAR10_natural_det_GDPR_CFE'):
         optim_kwargs['lr'] = 0.01
+    elif dataset_name in ('CIFAR10_natural_rand_SCFE',
+                        'CIFAR10_natural_det_SCFE'):
+        optim_kwargs['lr'] = 0.0005
     
     scheduler = ReduceLROnPlateau
     scheduler_kwargs = {}

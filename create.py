@@ -10,7 +10,7 @@ from torchvision.models import squeezenet1_1
 
 from utils.classifiers import ConvNet, WideResNet
 from utils.create import Create
-from utils.datasets import CIFAR10, FMNIST, MNIST, FOOD101, IMAGENETTE
+from utils.datasets import CIFAR10, FMNIST, MNIST, IMAGENETTE
 from utils.utils import ModelWithNormalization, dataloader, set_seed
 
 class Main(LightningLite):
@@ -104,8 +104,8 @@ class Main(LightningLite):
             atk_kwargs['eps'] = 0.5 if norm == 'L2' else 0.1 if norm == 'Linf' else None
             atk_kwargs['lamb_gdpr'] = 0.01
             atk_kwargs['lamb_cf_gdpr'] = 1e-3
-            atk_kwargs['L0_scfe'] = 1e-5
-            atk_kwargs['lamb_steps_scfe'] = 5
+            atk_kwargs['L0_scfe'] = 1e-4
+            atk_kwargs['lamb_steps_scfe'] = 4
 
         elif dataset_name == 'IMAGENETTE':
             classifier = squeezenet1_1()
