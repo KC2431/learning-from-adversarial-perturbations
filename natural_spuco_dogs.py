@@ -334,7 +334,7 @@ class Main(LightningLite):
                            lam0=5e-2,
                            lam_steps=4,
                            L0=1e-4, # changed from 1e-3 to 1e-4
-                           beta=5e-3 # Less beta for less sparsity
+                           beta=6e-3 # Less beta for less sparsity
                 )
                 adv_data = cfe_atk.get_CFs_natural_binary(data.to(classifier.device), labels.unsqueeze(1).to(classifier.device))
 

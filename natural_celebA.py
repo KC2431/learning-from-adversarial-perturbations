@@ -279,7 +279,7 @@ class Main(LightningLite):
         adv_dataset = {'imgs': [], 'labels': []}
 
         # Intialising the data to be attacked
-        adv_attack_data = CelebA(root='../SCRATCH', split='train', transform=val_transform)
+        adv_attack_data = CelebA(root=f'{dataset_path}', split='train', transform=val_transform)
         adv_attack_loader = torch.utils.data.DataLoader(adv_attack_data, 
                                                         batch_size=256, 
                                                         shuffle=False,

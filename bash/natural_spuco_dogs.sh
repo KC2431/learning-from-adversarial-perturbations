@@ -8,7 +8,7 @@ now=$(TZ=UTC-9 date '+%Y-%m-%d-%H-%M-%S')
 
 devices=${@}
 norms=(L2 Linf GDPR_CFE SCFE)
-comb_nat_perts=(no)
+comb_nat_perts=(yes no)
 seeds=(10 20 40)
 percentages=(20 50)
 
