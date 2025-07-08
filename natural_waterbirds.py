@@ -17,8 +17,9 @@ from utils.classifiers.binary_models import BinaryTrainedResNet
 from utils.datasets import BinaryDataset, SequenceDataset
 from utils.attacks import PGDL0, PGDL2, PGDLinf
 from utils.utils import freeze, set_seed
+from utils.Models import VAE, train_vae_v1
 from utils.gdpr_cfe import GDPR_CFE
-from utils.scfe import APG0_CFE
+from utils.scfe import APG0_CFE, APG0_CFE_VAE
 from utils.utils import ModelWithNormalization
 
 from wilds import get_dataset
@@ -164,6 +165,7 @@ class Main(LightningLite):
 
         # Fine tuning the model and setting the seed
         fine_tune_model = False
+        train_vae = True
         set_seed(seed)
 
         # Defining transformations
@@ -278,7 +280,94 @@ class Main(LightningLite):
                     device= 'cuda:0',
                 )
         elif norm == 'SCFE':
-            atk = APG0_CFE
+            atk = APG0_CFE_VAE
+
+            vae_0 = VAE()
+            vae_1 = VAE()
+ 
+            vae_0 = self.setup(vae_0)
+            vae_1 = self.setup(vae_1)
+
+            if train_vae:
+
+                class_0_indices = [i for i in range(len(train_data)) 
+                   if train_data[i][1] == 0]
+                
+                class_1_indices = [i for i in range(len(train_data)) 
+                   if train_data[i][1] == 1]
+
+                train_data_class_0 = torch.utils.data.Subset(train_data, class_0_indices)
+                train_data_class_1 = torch.utils.data.Subset(train_data, class_1_indices)
+
+                train_dataloader_class_0 = torch.utils.data.DataLoader(train_data_class_0, 
+                                                        batch_size=256, 
+                                                        shuffle=True,
+                                                        num_workers=3,
+                                                        pin_memory=True
+                        )
+                
+                train_dataloader_class_1 = torch.utils.data.DataLoader(train_data_class_1, 
+                                                        batch_size=32, 
+                                                        shuffle=True,
+                                                        num_workers=3,
+                                                        pin_memory=True
+                        )
+
+                vae_0.train()
+                vae_1.train()
+                
+                print("Training VAEs now for both classes.")
+
+                optim_vae_0 = torch.optim.Adam(params=vae_0.parameters(),
+                                              lr=1e-4,
+                                              weight_decay=1e-4
+                            )
+                optim_vae_1 = torch.optim.Adam(params=vae_1.parameters(),
+                                              lr=1e-4,
+                                              weight_decay=1e-4
+                            )
+
+                vae_0_log_dict = train_vae_v1(
+                    model=vae_0,
+                    optimizer=optim_vae_0,
+                    num_epochs=100,
+                    train_loader=train_dataloader_class_0,
+                    device=vae_0.device,
+                    logging_interval=10,
+                    reconstruction_term_weight=0.1,
+                    lr_scheduler=torch.optim.lr_scheduler.ReduceLROnPlateau(optim_vae_0, min_lr=1e-8, factor=0.6),
+                    save_model=f'{model_save_dir}/WaterBirds_class_0_seed_{seed}.pt'
+                )
+
+                vae_1_log_dict = train_vae_v1(
+                    model=vae_1,
+                    optimizer=optim_vae_1,
+                    num_epochs=100,
+                    train_loader=train_dataloader_class_1,
+                    device=vae_1.device,
+                    logging_interval=10,
+                    lr_scheduler=torch.optim.lr_scheduler.ReduceLROnPlateau(optim_vae_1, min_lr=1e-8, factor=0.6),
+                    reconstruction_term_weight=0.1,
+                    save_model=f'{model_save_dir}/WaterBirds_class_1_seed_{seed}.pt'
+                )
+
+            else:
+                print(f"Loading pre-trained VAEs for both classes.")
+
+                vae_0_state_dict = torch.load(f'{model_save_dir}/SpuCO_dogs_class_0_seed_{seed}.pt')
+                vae_1_state_dict = torch.load(f'{model_save_dir}/SpuCO_dogs_class_1_seed_{seed}.pt')
+
+                vae_0.load_state_dict(vae_0_state_dict)
+                vae_1.load_state_dict(vae_1_state_dict)
+
+            freeze(vae_0)
+            freeze(vae_1)
+
+            vae_0.eval()
+            vae_1.eval()
+
+            vaes = [vae_0, vae_1]
+
         elif norm == 'L2':
             atk = BinaryPGDL2(classifier=classifier, 
                               steps=steps, 
@@ -335,8 +424,13 @@ class Main(LightningLite):
                            iters=steps,
                            maxs=maxs,
                            mins=mins,
+                           vaes=vaes,
+                           theta=0.1,
                            lam_steps=4,
-                           L0=1e-3
+                           L0=1e-3,
+                           num_col_channels=data.shape[1],
+                           height=data.shape[2],
+                           width=data.shape[3]
                 )
                 adv_data = cfe_atk.get_CFs_natural_binary(data.to(classifier.device), labels.unsqueeze(1).to(classifier.device))
 
