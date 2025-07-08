@@ -11,6 +11,205 @@ import math
 from sklearn.model_selection import KFold
 
 
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+import time
+
+
+class Reshape(nn.Module):
+    def __init__(self, *args):
+        super().__init__()
+        self.shape = args
+    
+    def forward(self, x):
+        return x.view(self.shape)
+
+
+class VAE(nn.Module):
+    def __init__(self):
+        super().__init__()
+        
+        # Encoder: 224x224 -> 112x112 -> 56x56 -> 28x28 -> 14x14 -> 7x7
+        self.encoder = nn.Sequential(
+                nn.Conv2d(3, 32, stride=2, kernel_size=3, bias=False, padding=1),
+                nn.BatchNorm2d(32),
+                nn.LeakyReLU(0.1, inplace=True),
+                nn.Dropout2d(0.1),
+                #
+                nn.Conv2d(32, 64, stride=2, kernel_size=3, bias=False, padding=1),
+                nn.BatchNorm2d(64),
+                nn.LeakyReLU(0.1, inplace=True),
+                nn.Dropout2d(0.1),
+                #
+                nn.Conv2d(64, 128, stride=2, kernel_size=3, bias=False, padding=1),
+                nn.BatchNorm2d(128),
+                nn.LeakyReLU(0.1, inplace=True),
+                nn.Dropout2d(0.1),
+                #
+                nn.Conv2d(128, 256, stride=2, kernel_size=3, bias=False, padding=1),
+                nn.BatchNorm2d(256),
+                nn.LeakyReLU(0.1, inplace=True),
+                nn.Dropout2d(0.1),
+                #
+                nn.Conv2d(256, 512, stride=2, kernel_size=3, bias=False, padding=1),
+                nn.BatchNorm2d(512),
+                nn.LeakyReLU(0.1, inplace=True),
+                nn.Dropout2d(0.1),
+                #
+                nn.Flatten(),
+        )    
+        
+        # 512 * 7 * 7 = 25088
+        self.z_mean = torch.nn.Linear(25088, 512)
+        self.z_log_var = torch.nn.Linear(25088, 512)
+        
+        # Decoder: 7x7 -> 14x14 -> 28x28 -> 56x56 -> 112x112 -> 224x224
+        self.decoder = nn.Sequential(
+                torch.nn.Linear(512, 25088),
+                Reshape(-1, 512, 7, 7),
+                #
+                nn.ConvTranspose2d(512, 256, stride=2, kernel_size=3, padding=1, output_padding=1),
+                nn.BatchNorm2d(256),
+                nn.LeakyReLU(0.1, inplace=True),
+                nn.Dropout2d(0.1),
+                #
+                nn.ConvTranspose2d(256, 128, stride=2, kernel_size=3, padding=1, output_padding=1),
+                nn.BatchNorm2d(128),
+                nn.LeakyReLU(0.1, inplace=True),
+                nn.Dropout2d(0.1),
+                #
+                nn.ConvTranspose2d(128, 64, stride=2, kernel_size=3, padding=1, output_padding=1),
+                nn.BatchNorm2d(64),
+                nn.LeakyReLU(0.1, inplace=True),
+                nn.Dropout2d(0.1),
+                #
+                nn.ConvTranspose2d(64, 32, stride=2, kernel_size=3, padding=1, output_padding=1),
+                nn.BatchNorm2d(32),
+                nn.LeakyReLU(0.1, inplace=True),
+                nn.Dropout2d(0.1),
+                #
+                nn.ConvTranspose2d(32, 3, stride=2, kernel_size=3, padding=1, output_padding=1),
+                #
+                nn.Sigmoid()
+                )
+
+    def encoding_fn(self, x):
+        x = self.encoder(x)
+        z_mean, z_log_var = self.z_mean(x), self.z_log_var(x)
+        encoded = self.reparameterize(z_mean, z_log_var)
+        return encoded
+
+    def reparameterize(self, z_mu, z_log_var):
+        eps = torch.randn_like(z_mu)
+        z = z_mu + eps * torch.exp(z_log_var/2.) 
+        return z
+        
+    def forward(self, x):
+        x = self.encoder(x)
+        z_mean, z_log_var = self.z_mean(x), self.z_log_var(x)
+        encoded = self.reparameterize(z_mean, z_log_var)
+        decoded = self.decoder(encoded)
+        return encoded, z_mean, z_log_var, decoded
+
+
+def train_vae_v1(num_epochs, model, optimizer, device, 
+                 train_loader, loss_fn=None,
+                 logging_interval=100, 
+                 skip_epoch_stats=False,
+                 reconstruction_term_weight=1,
+                 lr_scheduler=None,
+                 save_model=None):
+    
+    log_dict = {'train_combined_loss_per_batch': [],
+                'train_combined_loss_per_epoch': [],
+                'train_reconstruction_loss_per_batch': [],
+                'train_kl_loss_per_batch': []}
+
+    if loss_fn is None:
+        loss_fn = F.mse_loss
+
+    start_time = time.time()
+    for epoch in range(num_epochs):
+
+        model.train()
+        for batch_idx, (features, _) in enumerate(train_loader):
+
+            features = features.to(device)
+
+            # FORWARD AND BACK PROP
+            encoded, z_mean, z_log_var, decoded = model(features)
+            
+            # total loss = reconstruction loss + KL divergence
+            #kl_divergence = (0.5 * (z_mean**2 + 
+            #                        torch.exp(z_log_var) - z_log_var - 1)).sum()
+            kl_div = -0.5 * torch.sum(1 + z_log_var 
+                                      - z_mean**2 
+                                      - torch.exp(z_log_var), 
+                                      dim=1) # sum over latent dimension
+
+            batchsize = kl_div.size(0)
+            kl_div = kl_div.mean() # average over batch dimension
+    
+            pixelwise = loss_fn(decoded, features, reduction='none')
+            pixelwise = pixelwise.view(batchsize, -1).sum(dim=1) # sum over pixels
+            pixelwise = pixelwise.mean() # average over batch dimension
+            
+            loss = reconstruction_term_weight*pixelwise + kl_div * 0.1
+            
+            optimizer.zero_grad()
+
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
+            # UPDATE MODEL PARAMETERS
+            optimizer.step()
+            
+            # LOGGING
+            log_dict['train_combined_loss_per_batch'].append(loss.item())
+            log_dict['train_reconstruction_loss_per_batch'].append(pixelwise.item())
+            log_dict['train_kl_loss_per_batch'].append(kl_div.item())
+            
+            if not batch_idx % logging_interval:
+                print('Epoch: %03d/%03d | Batch %04d/%04d | Loss: %.4f'
+                      % (epoch+1, num_epochs, batch_idx,
+                          len(train_loader), loss))
+        if not skip_epoch_stats:
+            model.eval()
+            
+            with torch.set_grad_enabled(False):  # save memory during inference
+                
+                train_loss = compute_epoch_loss_autoencoder(
+                    model, train_loader, loss_fn, device)
+                print('***Epoch: %03d/%03d | Loss: %.3f' % (
+                      epoch+1, num_epochs, train_loss))
+                log_dict['train_combined_loss_per_epoch'].append(train_loss.item())
+
+            if lr_scheduler is not None:
+                lr_scheduler.step(train_loss)
+
+        print('Time elapsed: %.2f min' % ((time.time() - start_time)/60))
+    
+    print('Total Training Time: %.2f min' % ((time.time() - start_time)/60))
+    if save_model is not None:
+        torch.save(model.state_dict(), save_model)
+    
+    return log_dict
+
+def compute_epoch_loss_autoencoder(model, data_loader, loss_fn, device):
+    model.eval()
+    curr_loss, num_examples = 0., 0
+    with torch.no_grad():
+        for features, _ in data_loader:
+            features = features.to(device)
+            logits = model(features)[3]
+            loss = loss_fn(logits, features, reduction='sum')
+            num_examples += features.size(0)
+            curr_loss += loss
+
+        curr_loss = curr_loss / num_examples
+        return curr_loss
+
 class KDE(metaclass=ABCMeta):
     '''
     Abstract class for Kernel Density Estimation.
@@ -394,7 +593,7 @@ class MNISTCNN(nn.Module):
         )
 
         self.fc1 = nn.Linear(in_features=64*6*6, out_features=600)
-        self.drop = nn.Dropout(0.25)
+        self.drop = nn.Dropout(0.1)
         self.fc2 = nn.Linear(in_features=600, out_features=120)
         self.fc3 = nn.Linear(in_features=120, out_features=10)
 
