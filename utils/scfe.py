@@ -119,7 +119,8 @@ class APG0_CFE(CFE):
                  L0: float = 1.0, lam0: float = 1.0, c: float = 0.01, beta: float = 0.5,
                  iters: int = 100, max_i: int = 100, eta: float = 1.1, prox: str = 'zero',
                  linesearch: bool = False, lam_steps: int = 10, verbose: bool = False,
-                 scale_model: bool = True) -> None:
+                 scale_model: bool = True, num_col_channels: int = 3, height: int = 224, 
+                 width: int = 224) -> None:
         '''
         Initialize the APG0_CFE class.
 
@@ -196,6 +197,9 @@ class APG0_CFE(CFE):
         self.lam_steps = lam_steps
         self.verbose = verbose
         self.scale_model = scale_model
+        self.num_col_channels = num_col_channels
+        self.height = height
+        self.width = width
 
 
     def predict(self, x: Tensor) -> Tensor:
@@ -208,13 +212,17 @@ class APG0_CFE(CFE):
         Returns:
             Tensor of shape (n, 1)
         '''
+        
         if self.numclasses == 2:
             if self.scale_model:
                 return 2 * super().predict(x) - 1
             else:
-                return super().predict(x.view(x.size(0), 3, 224, 224))
+                if self.num_col_channels is not None and self.height is not None and self.width is not None:
+                    return super().predict(x.view(x.size(0), self.num_col_channels, self.height, self.width))
+                else:
+                    return super().predict(x)
         else:
-            return super().predict(x.view(x.size(0), 3, 32, 32))
+            return super().predict(x.view(x.size(0), self.num_col_channels, self.height, self.width))
 
 
     def loss(self, x: Tensor, w: Tensor, y: Tensor, active: Tensor | None = None) -> Tensor:
@@ -262,7 +270,7 @@ class APG0_CFE(CFE):
         if active is None:
             active = torch.ones_like(self.lam, dtype=torch.bool)
         if self.numclasses == 2 and self.lam0 != 0:
-            classloss = self.lam[active.view(-1)] * torch.nn.CrossEntropyLoss(reduction='none')(self.predict(x + w), y.view(-1))
+            classloss = self.lam[active.view(-1)] * torch.nn.CrossEntropyLoss(reduction='none')(self.predict(x + w), y.view(-1)).view(-1, 1)
         elif self.lam0 != 0:
             logits = self.predict(x + w) # x and w are unflattened
             one_hot_y = F.one_hot(y.view(-1), self.numclasses)
@@ -510,6 +518,9 @@ class APG0_CFE(CFE):
             L0 = self.L0 if self.linesearch else 1 / self.L0
             L = torch.full_like(y, L0, dtype=self.dtype).view(y.size(0), *([1] * (x[0].dim())))
 
+            first_mom = 0
+            second_mom = 0
+
             for i in range(self.iters):
                 if self.verbose:
                     s1 = ''.join([' ' for _ in range(len(str(self.iters)) - len(str(i+1)))])
@@ -517,9 +528,9 @@ class APG0_CFE(CFE):
                     print(f"\rSearch step {s2}{step+1}/{self.lam_steps}, APG0 Iteration {s1}{i+1}/{self.iters}  ", end='')
 
 
-                grad, loss = self.get_grad_loss(x, w, y)
+                grad, loss = self.get_grad_loss(x, w, y) # Replace v with w for the FISTA
                 if self.linesearch:
-                    L = self.backtrack_line_search(x, w, y, grad, loss, L)
+                    L = self.backtrack_line_search(x, w, y, grad, loss, L) # Replace v with w for the FISTA
                 else:
                     # step size decay
                     # we take the reciprocal twice since L is applied as 1 / L
@@ -528,21 +539,38 @@ class APG0_CFE(CFE):
                 #print(f'Number of iters: {i}, lam_step: {step}')
 
                 # FISTA update
+                """
                 v_old = v.clone()
                 v = self.prox(w - 1 / L * grad, x, L)
                 t_old = t
                 t = 0.5 * (1 + math.sqrt(1 + 4 * t_old ** 2))
                 w = v + ((t_old - 1) / t) * (v - v_old)
+                """
+                weight_decay = 1e-3
+                beta_1, beta_2 = 0.9, 0.999
+                eps = 1e-8
+                lr = 1e-3
 
-                w = torch.clamp(x + w, 0, 1) - x
+                g = grad.clone()
 
+                if weight_decay != 0:
+                    g = g + weight_decay * v
+
+                first_mom = beta_1 * first_mom + (1 - beta_1) * g
+                second_mom = beta_2 * second_mom + (1 - beta_2) * torch.pow(g, 2)
+
+                first_mom_hat = first_mom / (1 - beta_1 ** (i + 1))
+
+                v_hat = second_mom / (1 - beta_2 ** (i + 1))
+                v = v - lr * first_mom_hat / (torch.sqrt(v_hat) + eps)
+
+                v = torch.clamp(x + v, 0, 1) - x
+                
             if self.numclasses == 2:
                 succ = self.predict(x + v) * y.view(-1) > 0
             else:
                 succ = self.predict(x + v).argmax(-1) == y.view(-1)
-            
-            
-
+                        
             succ = succ.view(-1)
             if self.lam_steps == 1:
                 best_w = v.clone()
@@ -611,14 +639,15 @@ class APG0_CFE(CFE):
             L0 = self.L0 if self.linesearch else 1 / self.L0
             L = torch.full_like(y, L0, dtype=self.dtype).view(y.size(0), *([1] * (x[0].dim())))
 
+            first_mom = 0
+            second_mom = 0
+
             for i in range(self.iters):
                 if self.verbose:
                     s1 = ''.join([' ' for _ in range(len(str(self.iters)) - len(str(i+1)))])
                     s2 = ''.join([' ' for _ in range(len(str(self.lam_steps)) - len(str(step+1)))])
                     print(f"\rSearch step {s2}{step+1}/{self.lam_steps}, APG0 Iteration {s1}{i+1}/{self.iters}  ", end='')
-
-
-                grad, loss = self.get_grad_loss_natural_binary(x, w, y)
+                grad, loss = self.get_grad_loss_natural_binary(x, v, y)
                 if self.linesearch:
                     L = self.backtrack_line_search(x, w, y, grad, loss, L)
                 else:
@@ -629,6 +658,7 @@ class APG0_CFE(CFE):
                 #print(f'Number of iters: {i}, lam_step: {step}')
 
                 # FISTA update
+                """
                 v_old = v.clone()
                 v = self.prox(w - 1 / L * grad, x, L)
                 t_old = t
@@ -636,7 +666,27 @@ class APG0_CFE(CFE):
                 w = v + ((t_old - 1) / t) * (v - v_old)
 
                 w = torch.clamp(x + w, 0, 1) - x
-            
+                """
+                # Adam
+                weight_decay = 1e-3
+                beta_1, beta_2 = 0.9, 0.999
+                eps = 1e-8
+                lr = 1e-3
+
+                g = grad.clone()
+
+                if weight_decay != 0:
+                    g = g + weight_decay * v
+
+                first_mom = beta_1 * first_mom + (1 - beta_1) * g
+                second_mom = beta_2 * second_mom + (1 - beta_2) * torch.pow(g, 2)
+
+                first_mom_hat = first_mom / (1 - beta_1 ** (i + 1))
+
+                v_hat = second_mom / (1 - beta_2 ** (i + 1))
+                v = v - lr * first_mom_hat / (torch.sqrt(v_hat) + eps)
+                v = torch.clamp(x + v, 0, 1) - x
+                
             succ = self.predict(x + v).argmax(-1) == y.view(-1)
         
             succ = succ.view(-1)
@@ -971,3 +1021,58 @@ class APG0_CFE_kNN(APG0_CFE):
 
         self.g = self.get_g(x, y)
         return super().get_CFs(x, y)
+
+
+
+class APG0_CFE_VAE(APG0_CFE):
+
+    def __init__(self, 
+                 model, 
+                 mins, 
+                 maxs, 
+                 numclasses, 
+                 range_min = None, 
+                 range_max = None, 
+                 L0 = 1, 
+                 lam0 = 1, 
+                 c = 0.01, 
+                 beta = 0.5, 
+                 iters = 100, 
+                 max_i = 100,
+                 theta = 1.0, 
+                 eta = 1.1, 
+                 vaes=[],
+                 prox = 'zero', 
+                 linesearch = False, 
+                 lam_steps = 10, 
+                 verbose = False, 
+                 scale_model = True, 
+                 num_col_channels = 3, 
+                 height = 224, 
+                 width = 224):
+
+        super().__init__(model=model, mins=mins, maxs=maxs, numclasses=numclasses,
+                            range_min=range_min, range_max=range_max, L0=L0, lam0=lam0,
+                            c=c, beta=beta, iters=iters, max_i=max_i, eta=eta, prox=prox,
+                            linesearch=linesearch, lam_steps=lam_steps, verbose=verbose,
+                            scale_model=scale_model, num_col_channels=num_col_channels, 
+                            height=height, width=width)
+        self.theta = theta
+        self.vaes = vaes
+        
+    def loss_natural_binary(self, x, w, y, active=None):
+        loss = super().loss_natural_binary(x=x, y=y, w=w)
+        vae_loss = torch.empty_like(loss)
+
+        for i, vae in enumerate(self.vaes):
+            mask = (y == i).view(-1)
+            if mask.any():
+                x_plus_w = (x[mask]+w[mask]).reshape(-1, self.num_col_channels, self.height, self.width)
+                vae_result = vae((x[mask]+w[mask]).reshape(-1, self.num_col_channels, self.height, self.width))[3]
+                vae_loss[mask] = torch.norm((x_plus_w - vae_result).view(x[mask].shape[0], -1), p=2, dim=1).pow(2).view(-1, 1)
+        return loss + self.theta * vae_loss
+
+    def get_CFs_natural_binary(self, x, y):
+        return super().get_CFs_natural_binary(x=x, y=y)
+
+
