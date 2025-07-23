@@ -1,0 +1,120 @@
+{
+  "training": {
+    "epochs": 20,
+    "batch_size": 108,
+    "test_batch_size": 128,
+    "adv_batch_size": 256,
+    "num_workers": 3,
+    "pin_memory": true,
+    "fine_tune_model": false
+  },
+  "optimizer": {
+    "type": "SGD",
+    "lr": 0.001,
+    "momentum": 0.9,
+    "weight_decay": 0.0001,
+    "nesterov": false
+  },
+  "scheduler": {
+    "type": "ReduceLROnPlateau",
+    "factor": 0.1,
+    "threshold": 1e-7,
+    "verbose": true
+  },
+  "model": {
+    "architecture": "resnet50",
+    "num_classes": 2,
+    "normalization": {
+      "mean": [0.485, 0.456, 0.406],
+      "std": [0.229, 0.224, 0.225]
+    }
+  },
+  "data": {
+    "dataset": "CelebA",
+    "target_attribute": 9,
+    "transforms": {
+      "train": {
+        "center_crop": 178,
+        "resize": 224,
+        "to_tensor": true
+      },
+      "adv_train": {
+        "random_resized_crop": 128,
+        "random_horizontal_flip": true
+      },
+      "val": {
+        "center_crop": 178,
+        "resize": 224,
+        "to_tensor": true
+      }
+    }
+  },
+  "adversarial_attacks": {
+    "data_range": [0, 1],
+    "steps": 100,
+    "GDPR_CFE": {
+      "max_image_range": 1.0,
+      "min_image_range": 0.0,
+      "optimizer": "Adam",
+      "iters": 100,
+      "lamb": 0.01,
+      "lamb_cf": 0.01,
+      "mode": "natural_binary",
+      "device": "cuda:0"
+    },
+    "L2": {
+      "eps": 3,
+      "steps": 100,
+      "data_range": [0, 1]
+    },
+    "Linf": {
+      "eps": 0.03,
+      "steps": 100,
+      "data_range": [0, 1]
+    },
+    "SCFE": {
+      "iters": 100,
+      "lam0": 0.01,
+      "lam_steps": 4,
+      "L0": 0.001,
+      "scale_model": false,
+      "numclasses": 2
+    }
+  },
+  "regularization": {
+    "grad_clip_norm": 1.0
+  },
+  "lightning": {
+    "accelerator": "gpu",
+    "strategy": "ddp_find_unused_parameters_false",
+    "precision": 16
+  },
+  "random_seed": {
+    "default": 10
+  },
+  "paths": {
+    "dataset_path": "../SCRATCH",
+    "models_path": "../SCRATCH/CFE_models",
+    "root": "/home/htc/kchitranshi/SCRATCH/CFE_datasets"
+  },
+  "dataset": {
+    "name": "CelebA",
+    "splits": {
+      "train": "train",
+      "validation": "valid",
+      "test": "test"
+    }
+  },
+  "evaluation": {
+    "metrics": ["accuracy", "attack_success_rate", "avg_L2_norms"],
+    "print_interval": 20
+  },
+  "environment": {
+    "cublas_workspace_config": ":4096:8"
+  },
+  "save_options": {
+    "save_model": true,
+    "save_adversarial_data": true,
+    "save_results": true
+  }
+}
